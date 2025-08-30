@@ -970,9 +970,13 @@ aco_t* p = malloc(sizeof(aco_t));
 
 2、aco_share_stack_new中使用mmap或者malloc分配的内存
 
-    p->real_ptr = mmap(NULL, sz, PROT_READ|PROT_WRITE, 
-                       MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-    p->ptr = malloc(sz);3、aco_create中分配的非主协程私有栈使用malloc分配的内存
+```c
+p->real_ptr = mmap(NULL, sz, PROT_READ|PROT_WRITE, 
+                   MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+p->ptr = malloc(sz);
+```
+
+3、aco_create中分配的非主协程私有栈使用malloc分配的内存
 
 ```c
 p->save_stack.ptr = malloc(save_stack_sz);

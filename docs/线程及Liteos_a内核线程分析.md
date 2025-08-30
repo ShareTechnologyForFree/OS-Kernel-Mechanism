@@ -74,7 +74,7 @@ graph LR
 
 ## 1.5、线程/任务的初始化
 
-通用初始化流程：
+通用初始化流程：(顺序不固定)
 
 1. **调度器和同步机制初始化**
     - 让调度器具备任务管理能力，初始化内核时钟、中断服务。
@@ -157,7 +157,7 @@ graph LR
 
 # 2、Liteos_a内核中线程/任务的实现
 
-Liteos_a内核中线程叫做任务Task。
+Liteos_a内核中线程叫做Task（任务）。
 
 
 
@@ -167,11 +167,13 @@ Liteos_a内核中线程叫做任务Task。
 
 * Liteos_a 内核中使用一个任务表示一个线程。
 * Liteos_a 内核中同优先级进程内的任务统一调度、运行。
-* Liteos_a 内核中的任务采用抢占式调度机制，同时支持时间片轮转调度和FIFO调度方式。
+* Liteos_a 内核中的HPF任务采用抢占式调度机制，同时支持时间片轮转调度和FIFO调度方式。
 
-* Liteos_a 内核的任务一共有32个优先级（0-31），最高优先级为0，最低优先级为31。
+* Liteos_a 内核的HPF任务一共有32个优先级（0-31），最高优先级为0，最低优先级为31。
 
-​	当前进程内, 高优先级的任务可抢占低优先级任务，低优先级任务必须在高优先级任务阻塞或结束后才能得到调度。除了官网给出的使用优先级字段的HPF调度算法之外，还支持按照Task的deadline进行任务调度的EDF算法。
+* Liteos_a内核的EDF任务按照调度参数截止时间deadline顺序执行。
+
+​	当前进程内, 高优先级的任务可抢占低优先级任务，低优先级任务必须在高优先级任务阻塞或结束后才能得到调度。
 
 
 
@@ -182,7 +184,11 @@ Liteos_a内核中线程叫做任务Task。
 - 初始化（Init）：任务正在被创建。
 - 就绪（Ready）：任务在就绪列表中，等待CPU调度。
 - 运行（Running）：任务正在运行。
-- 阻塞（Blocked）：任务被阻塞挂起。Blocked状态包括：pending（因为锁、事件、信号量等阻塞）、suspended（主动pend）、delay（延时阻塞）、pend time（因为锁、事件、信号量时间等超时等待）。
+- 阻塞（Blocked）：任务被阻塞挂起，Blocked状态包括：
+  - pending（因为锁、事件、信号量等阻塞）
+  - suspended（主动pend）、delay（延时阻塞）
+  - pend time（因为锁、事件、信号量时间等超时等待）
+
 - 退出（Exit）：任务运行结束，等待父任务回收其控制块资源。
 
 
@@ -258,8 +264,7 @@ Liteos_a内核中Task的状态有如下几种：
 
 // The task is blocked.
 #define OS_TASK_STATUS_BLOCKED  (OS_TASK_STATUS_INIT | OS_TASK_STATUS_PENDING | \
-                                 OS_TASK_STATUS_DELAY | OS_TASK_STATUS_PEND_TIME | \
-                                 OS_TASK_STATUS_SUSPENDED)
+                                 OS_TASK_STATUS_DELAY | OS_TASK_STATUS_PEND_TIME)
 
 // The delayed operation of this task is frozen.
 #define OS_TASK_STATUS_FROZEN       0x0200U

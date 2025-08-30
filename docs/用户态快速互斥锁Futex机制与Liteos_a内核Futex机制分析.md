@@ -245,9 +245,9 @@ typedef struct {
 
 
 
-## 2.3、Liteso_a内核Futex读写时序图
+## 2.3、Liteos_a内核Futex读写时序图
 
-Liteos_a内核中典型的FUtex读写时序图：
+Liteos_a内核中典型的Futex读写时序图：
 
 ```mermaid
 sequenceDiagram

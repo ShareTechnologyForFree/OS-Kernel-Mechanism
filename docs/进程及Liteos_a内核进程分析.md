@@ -871,9 +871,7 @@ int main(int argc, char * const *argv)
 
 在操作系统内核中，进程(Process)、线程(Thread)或任务(Task)的结构体内存分配确实有静态分配和动态分配两种主要模式，各有其适用场景和特点。
 
-
-
-静态分配模式
+**1）静态分配模式**
 
 优点
 
@@ -889,7 +887,7 @@ int main(int argc, char * const *argv)
 2. **扩展性差**：最大数量在编译时确定，难以动态调整
 3. **灵活性低**：无法根据实际需求动态调整
 
-在LiteOS-A中的应用
+在Liteos_a内核中的应用
 
 ```c:d:\Daniel_Files\OHOS_liteos_a\Code\kernel_liteos_a\kernel\base\core\los_task.c
 // 静态分配的任务控制块数组
@@ -899,7 +897,7 @@ LITE_OS_SEC_BSS UINT32 g_taskMaxNum;
 
 
 
-动态分配模式
+**2）动态分配模式**
 
 优点
 
@@ -917,7 +915,7 @@ LITE_OS_SEC_BSS UINT32 g_taskMaxNum;
 
 
 
-选择策略
+**3）选择策略**
 
 选择静态分配的场景
 
@@ -935,25 +933,7 @@ LITE_OS_SEC_BSS UINT32 g_taskMaxNum;
 
 
 
-LiteOS-A的混合策略
-
-在LiteOS-A内核中，采用了混合策略：
-
-1. **核心任务结构**：使用静态分配的任务控制块池
-```c:d:\Daniel_Files\OHOS_liteos_a\Code\kernel_liteos_a\kernel\base\core\los_task.c
-// 从预分配的池中获取任务控制块
-STATIC LosTaskCB *GetFreeTaskCB(VOID)
-{
-    // ... existing code ...
-}
-```
-
-2. **任务栈空间**：根据配置可以选择静态或动态分配
-3. **进程控制块**：通常采用动态分配以支持灵活的进程管理
-
-
-
-实际应用建议
+**4）实际应用建议**
 
 1. **系统设计初期**：根据目标平台和应用场景确定主要策略
 2. **性能关键路径**：优先考虑静态分配

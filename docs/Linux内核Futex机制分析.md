@@ -51,7 +51,7 @@ c. T2: futex-wake T1, futex-wait
 
 * 1|TaskA执行futex_swap系统调用进入内核，内核先执行futex_wake操作唤醒TaskB并加入就绪队列。
 
-* 2、Task接着执行futex_wait操作，加入等待队列，之后调度器选择下一个Task，可能是Taskzb，接着完成上下文，跳转执行TaskB的用户态程序。
+* 2、Task接着执行futex_wait操作，加入等待队列，之后调度器选择下一个Task，可能是TaskB，接着完成上下文，跳转执行TaskB的用户态程序。
 
 用户态任务切换时序图：
 
@@ -109,7 +109,17 @@ sequenceDiagram
 
 
 
-# 4、参考内容
+# 4、linux中futex两次syscall与Liteos_a中futex一次syscall对比
+
+Liteos_a 的 futex 设计是“**一次调用，多件事情**”，追求**内核路径的效率**；
+
+Linux 的设计是“**多次调用，各司其职**”，追求**接口的灵活性和用户态的控制力**。
+
+两者各有侧重，适应不同的需求和场景。Liteos_a 的方式在适合的场景下能提供显著的性能优势，而 Linux 的方式提供了无与伦比的灵活性和生态系统成熟度。
+
+
+
+# 5、参考内容
 
 1、[魅族内核团队对于futex_swap + DTS的性能优化的分析](https://kernel.meizu.com/2024/03/15/Futex%E6%9C%BA%E5%88%B6%E7%9A%84%E5%86%85%E6%A0%B8%E4%BC%98%E5%8C%96/)
 
