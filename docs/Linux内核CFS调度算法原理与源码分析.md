@@ -6,10 +6,12 @@
 
 CFS的公平性本质是 **“按权分配时间，按需补偿延迟”**：
 
-- 按权分配：通过权重比例分配CPU时间（高权重进程实际占用更多）；
+- 按权分配：通过权重比例，来分配CPU时间（高权重进程实际占用更多）；
 - 按需补偿：通过vruntime最小化策略，保证所有进程的虚拟时间轴同步推进，避免低优先级进程饥饿。
 
 这种设计既满足优先级需求，又在宏观上实现了“完全公平”（Completely Fair），是Linux调度器的核心创新。
+
+使用的Linux内核版本：Linux-4.18.10 （后续会升级为比较新的Linux-6.15.8版本，在主要流程上两个版本无本质差别，细节上会有一些差别）
 
 
 
@@ -18,29 +20,35 @@ CFS的公平性本质是 **“按权分配时间，按需补偿延迟”**：
 ## 1.1、vruntime计算公式
 
 ​	之前分析了linux内核的整体调度系统的原理与流程，这篇文章继续分析一下具体的CFS调度算法的原理与源码。
-​	CFS调度队列的核心工作原理是利用Task的虚拟运行时间vruntime作为cfs_rq调度队列的键值key，进行红黑树rbtree的排序，那么这个vruntime具体是什么？具体有哪些特性呢？我们从一下几个角度来考虑：
+​	CFS调度队列的核心工作原理是利用Task的虚拟运行时间vruntime作为cfs_rq调度队列的键值key，进行红黑树rbtree的排序，那么这个vruntime具体是什么？具体有哪些特性呢？我们从以下几个角度来考虑：
 
 * vruntime是什么？
 
-    * 答：使用Task的实际运行时间 和 Task根据优先级字段prio对应的权重weight 计算得来的一个一直增加的虚拟运行时间，为了体现在周期 T 时间内，cpu运行N个Task，保证每个Task的运行时间达到 T / N这么一个公平性。
+    * 答：使用Task的实际运行时间 和 Task根据优先级字段prio对应的权重weight 计算得来的一个一直增加的虚拟运行时间，为了体现在周期 T 时间内，cpu运行N个se，保证每个se的运行时间达到 T / N这么一个公平性。
+* 如何设置vruntime？==> 通过几个公式的设计，并计算出来的vruntime来体现出CFS的公平特性。
+    * 理论运行时间：理想状态下 Se的理论运行时间
+      * 公式1：Se的理论运行时间 = 调度周期T * (Se权重 / 所有Se总权重)
+      * 这个是每个Se的理论运行时间，由于Se在运行时受到中断、调度等等各种原因，导致实际运行时间无法和理论运行时间相同。
+    * 实际运行时间：使用系统Tick计算的来的 Se实际运行时间
+      * 公式2：Se实际运行时间 = curTime - startTime
+    * vruntime：即Se的虚拟运行时间
+      * 公式3：vruntime = Se的运行时间 * (NICE_0_LOAD / Se权重)
+      * NICE_0_LOAD 为 nice = 0 时的权重，作为基准，数值为1024，在sched_prio_to_weight数组中存储。
+      * Task权重数值越大，计算之后vruntime增长的越慢，下一次被调度到的概率越靠前。
+      * 这个公式3的精髓：vruntime和Se权重成反比，确保高优先级任务获得更多CPU时间。
+    * 理论vruntime：使用 公式1 计算的 理论运行时间 代入 公式2 所得到的 理论vruntime
+      * 公式4：理论vruntime = 调度周期T * NICE_0_LOAD / 所有Se总权重
+    * 实际vruntime：使用 公式2计算得来的 实际运行时间 代入公式3 所得到的 实际vruntime
+      * 公式5：实际vruntime = (curTime - startTime) * NICE_0_LOAD / Se权重
+* 真实系统运行时并不会使用 公式1 计算Se的实际运行时间，而是使用 公式2 得出。通过 **系统当前时间 - 起始时间** 计算 `delta_exec`，CFS 调度器实现了：
 
-* 如何设置vruntime？
+    * ✅ **极低开销**：O(1) 时间计算，避免公式化全局更新；
 
-    * ✅ 公式1：Task的实际运行时间 = 调度周期 * (Task权重 / 所有Task总权重)
-    * ✅ 公式2：vruntime = Task实际运行时间 * (NICE_0_LOAD / Task权重)
-        * NICE_0_LOAD 为 nice = 0 时的权重，数值为1024，在sched_prio_to_weight数组中存储。
-    * ✅ 公式3：公式1代入公式2得出 vruntime = 调度周期 * NICE_0_LOAD / 所有Task总权重
+    * ✅ **动态适应性**：自然处理任务增减与休眠唤醒；
 
-    * 真实系统运行时并不会使用 公式1 计算Task的实际运行时间，而是使用 now Time - Task Start Time 得出。通过 **系统当前时间 - 起始时间** 计算 `delta_exec`，CFS 调度器实现了：
+    * ✅ **高精度与实时性**：纳秒级计时支持快速抢占与响应；
 
-        * ✅ **极低开销**：O(1) 时间计算，避免公式化全局更新；
-
-        * ✅ **动态适应性**：自然处理任务增减与休眠唤醒；
-
-        * ✅ **高精度与实时性**：纳秒级计时支持快速抢占与响应；
-
-        * ✅ **架构简洁性**：分离时间测量与优先级处理，契合红黑树调度模型。
-
+    * ✅ **架构简洁性**：分离时间测量与优先级处理，契合红黑树调度模型。
 * 设置vruntime的时机有哪些？
     * Tick中断、Task创建、Task唤醒等等。
 * cfs_rq队列中如何通过vruntime对rbtree中的Task进行排序？
@@ -52,7 +60,7 @@ CFS的公平性本质是 **“按权分配时间，按需补偿延迟”**：
 
 
 
-## 1.2、prio变动一级时CPU时间约10%
+## 1.2、prio变动一级CPU时间变动10%
 
 Task优先级变化一位，cpu时间变化10%的原因：
 
@@ -94,13 +102,16 @@ nice值变化一位，权重变化1.25倍的原因：
 
 ![image-20250801171917508](./assets/image-20250801171917508-1754039958501-1.png)
 
-* 其中m为Task在迁移之前的vruntime
+* 其中m为Task在迁移之前的 实际vruntime
 
-* 迁移时，cpu1上的最小vruntime就是min_vRuntime_cpu1，要比Task迁移之前的m打很多，
+* 迁移时，cpu1上的最小vruntime就是min_vRuntime_cpu1，要比Task迁移之前的m大很多，
 
     如果迁移之后不修改Task的vruntime，那么可能导致cpu1除了Task之外的其他任务出现饥饿情况。
 
-* 那么linux将Task迁移之后的vruntime设置为 min_vRuntime_cpu1 - 6ms，这样迁移之后cpu1上的所有Task都有类似的vruntime，保证相对公平。
+* 那么linux将Task迁移之后的vruntime设置为 min_vRuntime_cpu1 - 6ms，这样迁移之后cpu1上的所有Task都有近似的vruntime数值，保证相对公平。
+
+    * 这个6ms也是通过优化得来的，保证迁移之后Task的vruntime不会太小。
+
 
 负载均衡主要体现在以下即可方面：
 
@@ -121,10 +132,10 @@ nice值变化一位，权重变化1.25倍的原因：
 组调度使用的数据结构：
 
 * sched_entity->run_node挂载到cfs_rq->tasks_timeline->rb_root上
-* sched_entity->my_rq 表示调度实体对应的是一个调度组，这是调度组维护的cfs调度队列cfs_rq。
+* sched_entity->my_rq != NULL 表示调度实体对应的是一个调度组，这是调度组维护的cfs调度队列cfs_rq。
 * 层层查找，直到找到 sched_entity->my_rq == NULL时，即调度实体表示一个具体的Task。
 
-![image-20250801174919385](./assets/image-20250801174919385.png)
+<img src="./assets/image-20250801174919385.png" alt="image-20250801174919385" style="zoom:20%;" />
 
 
 
@@ -147,65 +158,70 @@ struct cfs_rq {
 }
 ```
 
+
+
 # 3、vruntime数值的计算
 
-**公式1：实际运行时间计算**
+## 3.0、CFS的时间计算公式
+
+**公式1：Se理论运行时间**
 
 ```c
-实际运行时间 = 调度周期 × (进程权重 / 所有进程总权重进程权重)
+Se理论运行时间 = 调度周期T × (Se权重 / 所有Se总权重)
 ```
 
-**公式2：vruntime基础定义**
+**公式2：Se实际运行时间**
 
 ```c
-vruntime = 实际运行时间 × (NICE_0_LOAD / 进程权重)
+Se实际运行时间 = curTime - startTime
 ```
 
-**公式3：公式变换结果**
+**公式3：vruntime**
 
 ```c
-// 其中 >> 32 表示二进制右移32位，等效于除以 2^32
-inv_weight = 2^32 / weight
-vruntime = (delta_exec × NICE_0_LOAD × inv_weight) >> 32
+vruntime = Se的运行时间 x (NICE_0_LOAD / Se权重)
 ```
 
-内核实现函数：**优化计算函数签名**
+**公式4：Se的理论vruntime**
 
 ```c
-__calc_delta(delta_exec, weight, *lw)
+// 公式1计算的 Se理论运行时间 代入公式3
+Se的理论vruntime = 调度周期T x NICE_0LOAD / 所有Se总权重
 ```
 
-该函数直接实现公式3的移位优化计算，避免浮点运算。
+**公式5：Se的实际vruntime**
 
 ```c
-         公式1
-调度周期 + 权重比例 → 实际运行时间(delta_exec)
-          │
-          │ 公式2/3变换
-          ▼
-        vruntime
-          │
-          └─→ 通过inv_weight和移位实现整数优化计算
+// 公式2计算的 Se实际运行时间 代入公式3
+Se的实际vruntime = (curTime - startTime) x NICE_0LOAD / 所有Se总权重
+```
+
+其中在Linux内核中不会直接使用除法运算，而是将Se权重进行移位，使用左移右移的操作完成除法运算。比如：
+
+```c
+1、Se权重 为 weight
+2、inv_weight = 2^32 / weight
+3、xxx * inv_weight >> 32
+  = xxx * (2^32 / weight) / 2^32
+  = xxx / weight
 ```
 
 **关键优化点**：
  用 `inv_weight = 2^32 / weight` 和位操作代替除法，将浮点运算转为整数运算，大幅提升计算效率。这是CFS调度器高性能的关键设计。
 
-
-
 **总结：**
 
-* 公式1：在时钟中断中使用，这是Task运行时间的最大值，大于这个值就要让出cpu
-* 公式1、公式2：在新建Task使用，要为其设置初始 vruntime = 最小vruntime + 理论的vruntime（公式1和2计算得出）
-* 公式3：就是运行时计算Task的vruntime
+* 公式1：在时钟中断中使用，这是Task对应Se运行时间的最大值，大于这个值就要让出cpu
+* 公式1、公式3：在新建Task使用，要为其设置初始 vruntime = 最小vruntime + 理论的vruntime（公式1和3计算得出）
+* 公式2：就是运行时计算Task的vruntime
 
 
 
-## 3.1、sched_slice 函数计算 公式1
+## 3.1、公式1 Se理论运行时间
 
 ```c
 公式1：
-    实际运行时间 = 调度周期 × (进程权重 / 所有进程总权重进程权重)
+    Se理论运行时间 = 调度周期T × (Se权重 / 所有Se总权重)
 ```
 
 ```c
@@ -217,7 +233,6 @@ unsigned int sysctl_sched_latency			= 6000000ULL;
 unsigned int sysctl_sched_min_granularity	= 750000ULL;
 // 即：8 = 6ms / 0.75ms
 static unsigned int sched_nr_latency		= 8;
-
 
 /*
 核心目标：
@@ -255,10 +270,13 @@ static u64 __sched_period(unsigned long nr_running)
 		return sysctl_sched_latency;
 }
 
-// 公式1：实际运行时间 = 调度周期 × (进程权重 / 所有进程总权重进程权重)
+// 公式1：Se理论运行时间 = 调度周期T × (Se权重 / 所有Se总权重)
+// 注意：这里琐所说的se数量是表示一个Task，不表示调度组
 static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 {
-	// 计算调度周期
+	// 1、计算调度周期T
+    // 	  se数量 <= 8 ：周期为固定的6ms
+    //    se数量 > 8  ：周期为 se数量 * 0.75ms
 	u64 slice = __sched_period(cfs_rq->nr_running + !se->on_rq);
 
 	for_each_sched_entity(se) {
@@ -266,6 +284,7 @@ static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 		struct load_weight lw;
 
 		cfs_rq = cfs_rq_of(se);
+        // 2、计算所有se的总权重
 		load = &cfs_rq->load;
 
 		if (unlikely(!se->on_rq)) {
@@ -274,7 +293,9 @@ static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 			update_load_add(&lw, se->load.weight);
 			load = &lw;
 		}
-		// 计算实际运行时间 = 调度周期 × (进程权重 / 所有进程总权重)
+        // 3、计算当前se的权重为 se->load.weight
+        // 4、调用 __calc_delta 函数计算 公式1的 se的理论运行时间
+		// Se理论运行时间 = 调度周期T × (Se权重 / 所有Se总权重)
 		// 调度周期：slice
 		// 进程权重： se->load.weight
 		// 所有进程总权重：load
@@ -282,91 +303,28 @@ static u64 sched_slice(struct cfs_rq *cfs_rq, struct sched_entity *se)
 	}
 	return slice;
 }
-
 ```
 
-
-
-## 3.2、calc_delta_fair 函数计算 公式2
+其中 __calc_delta 函数：
 
 ```c
-公式2：
-	vruntime = 实际运行时间 × (NICE_0_LOAD / 进程权重)
-```
-
-```c
-// kernel\sched\fair.c
-// vruntime = 实际运行时间 × (NICE_0_LOAD / 进程权重)
-static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
-{
-	if (unlikely(se->load.weight != NICE_0_LOAD))
-		// - delta = 实际运行时间（delta_exec）
-		// - NICE_0_LOAD = 标准权重（1024）
-		// - &se->load = 进程权重结构
-		delta = __calc_delta(delta, NICE_0_LOAD, &se->load);
-
-	return delta;
-}
-```
-
-
-
-## 3.3、__calc_delta 函数计算 公式3
-
-```c
-公式3：
-    inv_weight = 2^32 / weight
-    vruntime = (delta_exec × NICE_0_LOAD × inv_weight) >> 32
-```
-
-```c
-// include\linux\sched.h
-#define SCHED_FIXEDPOINT_SHIFT    10
-
-// kernel\sched\sched.h
-#ifdef CONFIG_64BIT
-# define NICE_0_LOAD_SHIFT	(SCHED_FIXEDPOINT_SHIFT + SCHED_FIXEDPOINT_SHIFT)
-# define scale_load(w)		((w) << SCHED_FIXEDPOINT_SHIFT)
-# define scale_load_down(w)	((w) >> SCHED_FIXEDPOINT_SHIFT)
-#else
-# define NICE_0_LOAD_SHIFT	(SCHED_FIXEDPOINT_SHIFT)
-# define scale_load(w)		(w)
-# define scale_load_down(w)	(w)
-#endif
-
-// kernel\sched\fair.c
-#define WMULT_SHIFT    32
-#define WMULT_CONST    (~0U)  // 2^32 - 1 ≈ 2^32
-
-// 计算 inv_weight = 2^32 / weight
-static void __update_inv_weight(struct load_weight *lw)
-{
-	unsigned long w;
-
-	if (likely(lw->inv_weight))
-		return;
-
-	w = scale_load_down(lw->weight);
-
-	if (BITS_PER_LONG > 32 && unlikely(w >= WMULT_CONST))
-		lw->inv_weight = 1;
-	else if (unlikely(!w))
-		lw->inv_weight = WMULT_CONST;
-	else
-		// WMULT_CONST = (~0U) 即 2^32 - 1 ≈ 2^32
-		// inv_weight = 2^32 / weight
-		lw->inv_weight = WMULT_CONST / w;
-}
-
-// 公式3：vruntime = (delta_exec × NICE_0_LOAD × inv_weight) >> 32
+// 32位系统下使用sched_slice调用此函数计算公式1中 Se的理论运行时间
+// 参数：
+// 		delta_exec 为 sched_slice传入的 slice，即周期T
+// 		weight 为 sched_slice传入的 se->load.weight，即se权重
+// 		lw 为 sched_slice传入的 load，即总权重
+// 返回值：
+// 		return = 周期T * se权重 / 总权重
 static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw)
 {
-    // fact = NICE_0_LOAD >> 10
+    // 32位系统下，fact = weight，即为se权重
     u64 fact = scale_load_down(weight);  
     // shift = 32
     int shift = WMULT_SHIFT;
 
-	// 计算 inv_weight = 2^32 / weight
+	// 32位系统下
+    // lw->inv_weight = 2^32-1 / 总权重
+    // 			  ≈ 2^32 / 总权重
     __update_inv_weight(lw);
 
     // 防止溢出的优化处理
@@ -377,7 +335,9 @@ static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight
         }
     }
 
-    // 核心计算：fact = NICE_0_LOAD × inv_weight
+    // 32位下
+    // fact = fact * lw->inv_weight
+    //      = se权重 * 2^32 / 总权重
     fact = (u64)(u32)fact * lw->inv_weight;
 
     // 再次防止溢出
@@ -386,66 +346,209 @@ static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight
         shift--;
     }
 
-    // 最终计算:
-	// vruntime = (delta_exec x fact) >> shift
-	// 			= (delta_exec x NICE_0_LOAD × inv_weight) >> 32
+    // 最终计算
+	// 		delta_exec : 周期T
+	// 		fact ：se权重 * (2^32-1 / 总权重)
+	// 		shift ：32
+	// return = 周期T * se权重 / 总权重
     return mul_u64_u32_shr(delta_exec, fact, shift);
+}
+```
+
+其中 mul_u64_u32_shr 函数：
+
+```c
+static inline u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+{
+	u32 ah, al;
+	u64 ret;
+
+	// a 就是传入的周期T
+	// al 是 a 的低32位
+	al = a;
+	// ah 是 a 的高32位，在32位系统下为0
+	ah = a >> 32;
+
+	// ret = (al * mul) >> 32
+	ret = mul_u32_u32(al, mul) >> shift;
+	if (ah)
+		ret += mul_u32_u32(ah, mul) << (32 - shift);
+
+	// 在32位系统下，这个返回值
+	// ret = (周期T * se权重 * (2^32-1 / 总权重)) >> 32
+    //     ≈ (周期T * se权重 / 总权重)
+	return ret;
 }
 ```
 
 
 
-## 3.4、update_curr 函数更新 vruntime
+## 3.2、公式2 Se实际运行时间
+
+```c
+公式2：
+    Se实际运行时间 = curTime - startTime
+```
+
+Se实际运行时间不需要给出特定函数，在代码中直接使用即可，比如：
+
+```c
+static void update_curr(struct cfs_rq *cfs_rq)
+{
+	struct sched_entity *curr = cfs_rq->curr;
+	// 1、更新 实际运行时间
+	// 1.1、获取当前时间：now
+	u64 now = rq_clock_task(rq_of(cfs_rq));
+	u64 delta_exec;
+
+	if (unlikely(!curr))
+		return;
+
+	// 1.2、计算本次的实际运行时间：delta_exec = now - curr->exec_start;
+	delta_exec = now - curr->exec_start;
+。。。
+}
+```
+
+
+
+## 3.3、公式3 vruntime
+
+```c
+公式3：
+	vruntime = Se的运行时间 x (NICE_0_LOAD / Se权重)
+```
+
+使用 calc_delta_fair 函数进行计算：
+
+```c
+// kernel\sched\fair.c
+// vruntime = 运行时间 × (NICE_0_LOAD / Se权重)
+static inline u64 calc_delta_fair(u64 delta, struct sched_entity *se)
+{
+	if (unlikely(se->load.weight != NICE_0_LOAD))
+		// - delta = 运行时间（delta_exec）
+        // 			 	注意这个 delta 到底是 理论运行时间、还是实际运行时间 都可以
+		// - NICE_0_LOAD = 标准权重（1024）
+		// - &se->load = 进程权重
+		delta = __calc_delta(delta, NICE_0_LOAD, &se->load);
+
+	return delta;
+}
+```
+
+其中 __calc_delta 函数：
+
+```c
+// 32位系统下使用calc_delta_fair调用此函数计算公式3的 vruntime
+// 参数：
+// 		delta_exec 为 calc_delta_fair传入的 delta，即Se的运行时间
+// 		weight 为 calc_delta_fair传入的 NICE_0_LOAD，即nice 为 0 时的权重
+// 		lw 为 calc_delta_fair传入的 &se->load，即se的权重
+// 返回值：
+// 		return = Se的运行时间 * NICE_0_LOAD / se权重
+static u64 __calc_delta(u64 delta_exec, unsigned long weight, struct load_weight *lw)
+{
+    // 32位系统下，fact = weight，即nice 为 0 时的权重 NICE_0_LOAD
+    u64 fact = scale_load_down(weight);  
+    // shift = 32
+    int shift = WMULT_SHIFT
+
+	// 32位系统下
+    // lw->inv_weight = 2^32-1 / se的权重
+    // 			  ≈ 2^32 / se的权重
+    __update_inv_weight(lw);
+
+    // 防止溢出的优化处理
+    if (unlikely(fact >> 32)) {
+        while (fact >> 32) {
+            fact >>= 1;
+            shift--;
+        }
+    }
+
+    // 32位下
+    // fact = fact * lw->inv_weight
+    //      = NICE_0_LOAD * 2^32 / se的权重
+    fact = (u64)(u32)fact * lw->inv_weight;
+
+    // 再次防止溢出
+    while (fact >> 32) {
+        fact >>= 1;
+        shift--;
+    }
+
+    // 最终计算
+	// 		delta_exec : Se运行时间
+	// 		fact ：NICE_0_LOAD * (2^32-1 / se的权重)
+	// 		shift ：32
+	// return = Se运行时间 * NICE_0_LOAD / se的权重
+    return mul_u64_u32_shr(delta_exec, fact, shift);
+}
+```
+
+其中 mul_u64_u32_shr 函数：
+
+```c
+static inline u64 mul_u64_u32_shr(u64 a, u32 mul, unsigned int shift)
+{
+	u32 ah, al;
+	u64 ret;
+
+	// a 就是传入的周期T
+	// al 是 a 的低32位
+	al = a;
+	// ah 是 a 的高32位，在32位系统下为0
+	ah = a >> 32;
+
+	// ret = (al * mul) >> 32
+	ret = mul_u32_u32(al, mul) >> shift;
+	if (ah)
+		ret += mul_u32_u32(ah, mul) << (32 - shift);
+
+	// 在32位系统下，这个返回值
+	// ret = (运行时间 * NICE_0_LOAD * (2^32-1 / se的权重)) >> 32
+    //     ≈ (运行时间 * NICE_0_LOAD / se的权重)
+	return ret;
+}
+```
+
+
+
+## 3.4、公式4 理论vruntime
+
+使用公式1计算的 理论运行时间 代入公式3中，得到 理论vruntime
+
+```c
+// 公式1计算的 Se理论运行时间 代入公式3
+Se的理论vruntime = 调度周期T x NICE_0LOAD / 所有Se总权重
+```
+
+
+
+## 3.5、公式5 实际vruntime
+
+使用公式2计算的 理论运行时间 代入公式3中，得到 理论vruntime
+
+```c
+// 公式2计算的 Se实际运行时间 代入公式3
+Se的实际vruntime = (curTime - startTime) x NICE_0LOAD / 所有Se总权重
+```
+
+
+
+## 3.6、update_curr 函数更新 vruntime
 
 update_curr 函数主要完成以下功能：
 
-* 1、计算 Task 在 cpu 上的 delta_exec 和 vruntime
-* 2、统计 Task 总的 delta_exec 和 vruntime
-* 3、更新 cfs_rq 中的 min_vruntime
+* 1、计算 Task 在 cpu 上的 delta_exec（实际运行时间） 和 vruntime（实际vruntime）
+* 2、统计 Task 总的 delta_exec（实际运行时间） 和 vruntime（实际vruntime）
+* 3、更新 cfs_rq 中的 min_vruntime（这个也是Task的实际vruntime）
 
 实际运行时间 和 虚拟运行时间 的更新示意图如下：
 
 ```c
 // kernel\sched\fair.c
-
-static void update_min_vruntime(struct cfs_rq *cfs_rq)
-{
-	// t0：选择Task1运行，此时Task1的vtuntime = 1000 ns，Task2变为leftNode，且vruntime = 2000 ns
-	// Task1 运行了 1500 ns
-	// t1：此时Task1的 vruntime = 2500 ns、Task2的 vruntime = 2000 ns
-	struct sched_entity *curr = cfs_rq->curr;
-	struct rb_node *leftmost = rb_first_cached(&cfs_rq->tasks_timeline);
-
-	u64 vruntime = cfs_rq->min_vruntime;
-
-	if (curr) {
-		if (curr->on_rq)
-			vruntime = curr->vruntime;
-		else
-			curr = NULL;
-	}
-
-	if (leftmost) { /* non-empty tree */
-		struct sched_entity *se;
-		se = rb_entry(leftmost, struct sched_entity, run_node);
-
-		if (!curr)
-			vruntime = se->vruntime;
-		else
-			// 这里选择Task1、Task2的最小值 min(2500, 2000) = 2000
-			vruntime = min_vruntime(vruntime, se->vruntime);
-	}
-
-	/* ensure we never gain time by being placed backwards. */
-	// 这里选择Task1运行之前的1000和刚才的min比较 max(1000, min(2500, 2000)) = 2000
-	cfs_rq->min_vruntime = max_vruntime(cfs_rq->min_vruntime, vruntime);
-#ifndef CONFIG_64BIT
-	smp_wmb();
-	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
-#endif
-}
-
-
 static void update_curr(struct cfs_rq *cfs_rq)
 {
 	struct sched_entity *curr = cfs_rq->curr;
@@ -475,7 +578,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
 	schedstat_add(cfs_rq->exec_clock, delta_exec);
 
 	// 2、更新 虚拟运行时间
-	// 2.1、使用时钟获取的，实际运行时间delta_exec 代入公式2(calc_delta_fair) 得到本次虚拟运行时间 vruntime
+	// 2.1、使用时钟获取的，实际运行时间delta_exec 代入公式3(calc_delta_fair) 得到本次虚拟运行时间 vruntime
 	// 2.2、更新总的虚拟运行时间 curr->vruntime
 	curr->vruntime += calc_delta_fair(delta_exec, curr);
 
@@ -495,6 +598,49 @@ static void update_curr(struct cfs_rq *cfs_rq)
 }
 ```
 
+其中 update_min_vruntime 函数：
+
+```c
+static void update_min_vruntime(struct cfs_rq *cfs_rq)
+{
+	// t0：选择Task1运行，此时Task1的vtuntime = 1000 ns，Task2变为leftNode，且vruntime = 2000 ns
+	// t0~t1：Task1 运行了 1500 ns
+	// t1：此时Task1的 vruntime = 2500 ns、Task2的 vruntime = 2000 ns
+	struct sched_entity *curr = cfs_rq->curr;
+	struct rb_node *leftmost = rb_first_cached(&cfs_rq->tasks_timeline);
+
+	u64 vruntime = cfs_rq->min_vruntime;
+
+	if (curr) {
+		if (curr->on_rq)
+			vruntime = curr->vruntime;
+		else
+			curr = NULL;
+	}
+
+	if (leftmost) { /* non-empty tree */
+		struct sched_entity *se;
+		se = rb_entry(leftmost, struct sched_entity, run_node);
+
+		if (!curr)
+			vruntime = se->vruntime;
+		else
+			// 这里选择Task1、Task2的最小值 min(2500, 2000) = 2000
+			vruntime = min_vruntime(vruntime, se->vruntime);
+	}
+
+	/* ensure we never gain time by being placed backwards. */
+	// 这里选择Task1运行之前的1000和刚才的min比较 max(1000, min(2500, 2000)) = 2000
+    // 因为vruntime是一直增加的，先在t1时间算一个小的，在和t0时刻中选一个大的
+	cfs_rq->min_vruntime = max_vruntime(cfs_rq->min_vruntime, vruntime);
+#ifndef CONFIG_64BIT
+	smp_wmb();
+	cfs_rq->min_vruntime_copy = cfs_rq->min_vruntime;
+#endif
+}
+
+```
+
 
 
 update_curr 函数中 实际运行时间 和 虚拟运输时间 的更新示意图：
@@ -508,9 +654,7 @@ update_min_vruntime 函数中 调度队列最小 虚拟运行时间的更新示�
 
 
 
-
-
-# 4、新建进程 函数调用链
+# 4、新建进程中的vruntime更新
 
 1、初始化调度类相关的变量
 
@@ -555,7 +699,7 @@ sys_fork
 // 2、设置新建进程的 vruntime (根据理论计算出来的相对值)
                     // 对新建进行进程惩罚，使其vruntime从当前时刻增加一些时间
                     place_entity(cfs_rq, se, 1);
-                        // cfs_rq中最小的vruntime + 新建进程se的理论值(公式1+公式2计算得来)
+                        // cfs_rq中最小的vruntime + 新建进程se的理论值(公式1+公式3计算得来)
                         // 这里的理论值是说，从此刻开始为周期T的开始，那么新建进程根据优先级、权重，
                         // 理论上在一个周期T之内应该执行的虚拟运行时间
                         // vruntime : 系统从0开始运行到现在的vruntime
@@ -568,7 +712,7 @@ sys_fork
                         // 因为系统认为新建进程要靠后一些执行才合理，如果是唤醒进程就要先执行
                         se->vruntime = max_vruntime(se->vruntime, vruntime);
 					// 再减去 cfs_rq->min_vruntime，转换为相对值，
-					// 再后续将Task入就绪队列时，再将其转换为相对值
+					// 再后续将Task入就绪队列时，再将其转换为绝对值
 					// 因为那时的cfs_rq->min_vruntime可能已经变了
 					se->vruntime -= cfs_rq->min_vruntime;
     	wake_up_new_task
@@ -592,12 +736,12 @@ sys_fork
             		rq->curr->sched_class->check_preempt_curr(rq, p, flags);
 					check_preempt_wakeup // cfs 提供的 sched_class->check_preempt_curr
                         // 一般新建进程不会设置 curr 的 TIF_NEED_RESCHED 标志位
-                        // 因为系统考虑 新建进行 要比现有的进程要晚点执行，即优先级不要太高
+                        // 因为系统考虑 新建 要比现有的进程要晚点执行，即优先级不要太高
 ```
 
 
 
-# 5、唤醒进程 函数调用链
+# 5、唤醒进程中的vruntime更新
 
 1、（负载均衡）为唤醒进程选择空闲的CPU
 
@@ -632,10 +776,11 @@ wake_up_new_task
                                                 // 唤醒进程 vruntime = cfs_rq->min_vruntime - 6ms
                                                 vruntime -= thresh;
                                             }
-                                            // se->vruntime : 为继承父进程的 vruntime
-                                            // vruntime : 刚才计算的理论 vruntime
-                                            // 两者取一个较大者，这样保证新建进程不会抢占原有Task
-                                            // 因为系统认为新建进程要靠后一些执行才合理，如果是唤醒进程就要先执行
+                                            // se->vruntime : 之前se下CPU时的vruntime
+											// vruntime ：是当前更新的vruntime
+											// 因为系统的vruntime是一直增加的，
+											// 所以这里更新se->vruntime要选择大的，保证不会让
+											// 这个se保持很小的vruntime霸占CPU
                                             se->vruntime = max_vruntime(se->vruntime, vruntime);
                                     // 将唤醒进程入队列
                                     if (!curr)
@@ -675,7 +820,7 @@ wake_up_new_task
 
 
 
-# 6、时钟中断
+# 6、时钟中断中的vruntime更新
 
 时钟中断会定期检测当前Task的运行时间是否到达了理论运行时间，如果到达就要设置重新调度的标志TIF_NEED_RESCHED。
 
@@ -691,7 +836,7 @@ tick_handle_periodic
 					entity_tick(cfs_rq, se, queued);
                         if (cfs_rq->nr_running > 1)
                             check_preempt_tick(cfs_rq, curr);
-                                // 1、自身时间片你抢占
+                                // 1、自身时间片抢占
                                 // ideal_runtime：计算当前Task在本周期内的理论运行时间
                                 ideal_runtime = sched_slice(cfs_rq, curr);
                                 // delta_exec 当前Task在本周期内的实际运行时间
@@ -797,7 +942,8 @@ static void entity_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr, int qu
 # 7、cfs调度算法
 
 调度算法主要完成以下事情：
-1、针对主动让出CPU的Task，需要从对应的就绪队列上删除该Task：deactive_task()。
+
+1、针对主动让出CPU的Task
 
 2、从就绪队列上选择下一个合适的Task。
 

@@ -2,29 +2,68 @@
 
 [TOC]
 
-# 0、调度的概念与调度通用流程图
+# 0、环境版本
 
-* 调度的概念：调度器的本质是一个资源分配器 ，负责决定在什么时候、哪个进程/线程可以使用CPU资源，及使用多长时间。在具体的内核中，就是进行进程/线程/任务的切换。
-
-* 调度的通用流程：
-
-    ![image-20250730151604934](./assets/image-20250730151604934.png)
-
-* 其中涉及到的相关概念：
-
-    * 调度队列
-    * TCB
-    * 两者的链接方式
-    * 设置调度标志的时机
-    * 执行调度的时机
+Linux内核版本：[linux-6.15.8](https://www.kernel.org/pub/linux/kernel/v6.x/linux-6.15.8.tar.gz)
 
 
 
-# 1、linux内核中调度相关的各种概念与数据结构
+# 1、调度的概念与调度通用流程图
 
-## 1.1、调度队列的抽象
+## 1.1、调度的概念
 
-调度策略：系统提供几种不同的调度策略
+调度器的本质是一个资源分配器 ，负责决定在什么时候、哪个进程/线程可以使用CPU资源，及使用多长时间。在具体的内核中，就是进行进程/线程/任务的切换。
+
+
+
+## 1.2、调度的通用流程
+
+​	现代多数操作系统内核当中，调度从启动初始化，再到系统运行过程中的主要流程可以使用如下调度通用流程图表示：
+
+![image-20250730151604934](./assets/image-20250730151604934.png)
+
+
+
+## 1.3、调度通用流程中的相关结构
+
+其中涉及到的相关概念或者数据结构有：
+
+* 运行时调度队列：系统提供运行时调度队列维护调度实体，按照某种规则进行排序，在任务调度时选择权限最高的调度实体作为下一个要运行的调度实体（调度实体一般对应一个运行实体）。
+* 运行实体：系统中真正使用CPU时的结构，一般是TCB。
+* 调度实体：系统中真正使用调度队列的结构，一般是SE。
+
+* 调度队列、调度实体、运行实体的连接关系：一般通过链表、红黑树、等等方式连接。
+* 设置调度标志的时机：当系统需要重新进行任务调度时，会在当前运行实体中设置一个 重新调度的标志位。
+* 执行任务调度的时机（安全调度点）：当系统运行到某些安全调度点时会判断是否设置 重新调度的标志位，决定是否需要调度。
+
+注：调度实体和运行实体可以是同一个，也可以分开。取决于系统在性能、操作灵活性等等方面的考虑。
+
+
+
+# 2、Linux内核中调度相关的各种概念与数据结构
+
+## 2.1、运行实体和调度实体
+
+Linux内核中使用 task_struct 作为分配资源的运行实体、使用sched_entity、sched_rt_entity、sched_dl_entity等作为调度实体。
+
+```c
+// include\linux\sched.h
+struct task_struct {
+...
+	struct sched_entity			se;
+	struct sched_rt_entity		rt;
+	struct sched_dl_entity		dl;
+...
+    const struct sched_class	*sched_class;
+...
+}
+```
+
+
+
+## 2.2、调度策略
+
+Linux内核中提供几种不同的调度策略
 
 ```c
 #define SCHED_NORMAL		0	// CFS调度
@@ -36,7 +75,11 @@
 #define SCHED_DEADLINE	    6	// 最早截止时间调度
 ```
 
-调度类：系统针对不同的调度策略提供不同的调度类，即提供不同的调度操作函数
+
+
+## 2.3、调度类
+
+调度类：系统针对不同的调度策略提供不同的调度类，调度类中提供对应的操作函数，入队列、出队列、更新时间等等。
 
 ```c
 struct sched_class stop_sched_class;   // 最高优先级
@@ -46,30 +89,41 @@ struct sched_class fair_sched_class;   // CFS调度
 struct sched_class idle_sched_class;   // 空闲调度
 ```
 
+
+
+## 2.4、运行时调度队列
+
 运行时调度队列：每个cpu使用一个单独的struct rq运行时队列，并维护三种具体的运行时调度队列
 
 ```c
-struct cfs_rq     ==> CFS调度队列   （vruntime排序的红黑树）
-struct rt_rq      ==> RT调度队列      （优先级位图下管理的链表）
-struct dl_rq      ==> DL调度队列     （deadline排序的红黑树）
+// kernel\sched\sched.h
+struct rq { ==> 每个CPU一个运行时调度队列
+...
+    struct cfs_rq	==> CFS调度队列	（vruntime排序的红黑树）
+    struct rt_rq	==> RT调度队列	（优先级位图下管理的链表）
+    struct dl_rq	==> DL调度队列	（deadline排序的红黑树）
+...
+}
 ```
 
-调度类、调度策略、运行时调度队列的对应关系
 
-|                     调度策略                      |                  调度类                  |   运行队列    |
-| :-----------------------------------------------: | :--------------------------------------: | :-----------: |
-|                  SCHED_DEADLINE                   |              dl_sched_class              | struct dl_rq  |
-|            SCHED_FIFO、<br />SCHED_RR             |              rt_sched_class              | struct rt_rq  |
+
+## 2.5、调度策略、调度类、运行时调度队列的对应关系
+
+| 调度策略                                          |                  调度类                  |   运行队列    |
+| ------------------------------------------------- | :--------------------------------------: | :-----------: |
+| SCHED_DEADLINE                                    |              dl_sched_class              | struct dl_rq  |
+| SCHED_FIFO、<br />SCHED_RR                        |              rt_sched_class              | struct rt_rq  |
 | SCHED_NORMAL、<br />SCHED_BATCH、<br />SCHED_IDLE |             fair_sched_class             | struct cfs_rq |
-|                     特殊情况                      | stop_sched_class、<br />idle_sched_class |   特殊处理    |
+| 特殊情况                                          | stop_sched_class、<br />idle_sched_class |   特殊处理    |
 
 ![image-20250728201918958](./assets/image-20250728201918958.png)
 
 
 
-## 1.2、Task与调度队列的链接关系
+## 2.6、运行实体与调度队列的连接关系
 
-* 链接关系：rq 通过cfs_rq / rt_rq / dl_rq 链接 task_struct的sched_entity / sched_rt_entity / sched_dl_entity
+* 连接关系：rq 通过cfs_rq / rt_rq / dl_rq 链接 task_struct的sched_entity / sched_rt_entity / sched_dl_entity
 
     ![linux内核调度队列与task的链接图](./assets/linux%E5%86%85%E6%A0%B8%E8%B0%83%E5%BA%A6%E9%98%9F%E5%88%97%E4%B8%8Etask%E7%9A%84%E9%93%BE%E6%8E%A5%E5%9B%BE.png)
 
@@ -81,22 +135,24 @@ struct dl_rq      ==> DL调度队列     （deadline排序的红黑树）
 
 
 
-# 2、linux内核中的调度的具体流程分析
+# 3、Linux内核的整体调用流程
 
-## 2.1、代码调用链分析
+## 3.1、整体调用链分析
 
-### 2.1.0、整体调用链分析
+Linux内核整体上遵循通用的调度流程，包含第1章中通用调度流程的所有步骤。
 
-​	linux内核整体上遵循通用的调度流程，包含第0章中通用调度流程的所有步骤。
-
-​	接下来分析在32位arm v7-a架构下，linux内核在通用流程中的每一步是如何实现的，以及每一步涉及到linux内核自己所使用的具体方式。包括：
+接下来分析在32位（64位系统流程类似，架构相关代码在 arch/ 目录下）arm v7-a架构下，Linux内核在通用流程中的每一步是如何实现的，以及每一步涉及到Linux内核自己所使用的具体方式。包括：
 
 * 调度队列如何初始化、如何工作
 * 调度实体如何初始化、如何工作
 * 调度类如何初始化、如何工作
-* 任务和调度队列在如何链接
+* 任务和调度队列在如何连接
 
-等等问题，接下来分析linux内核调度流程的整体代码调用链：
+等等问题。
+
+
+
+## 3.2、Linux内核调度的整体代码调用链
 
 ```c
 // 0、系统启动
@@ -123,7 +179,8 @@ __schedule
 		rq = context_switch(rq, prev, next, &rf);
 			switch_to(prev, next, prev);
 				last = __switch_to(prev,task_thread_info(prev), task_thread_info(next));
-				// 重点有：地址空间、寄存器等等内容的切换
+				// 重点有：1️⃣地址空间的切换、2️⃣寄存器的切换、其他
+// arch\arm\kernel\entry-armv.S
 				ENTRY(__switch_to)
 // 4、运行Task
                     // 恢复新任务的寄存器并跳转
@@ -143,7 +200,8 @@ __schedule
 4.4、系统事件
     - 中断处理 ：中断可能唤醒高优先级任务
     - 系统调用 ：某些系统调用可能触发调度
-    - 负载均衡 ：SMP系统中的CPU间负载平衡          
+    - 负载均衡 ：SMP系统中的CPU间负载平衡     
+4.5、等等情况     
 */
                     
 // 5、设置调度标志
@@ -157,14 +215,15 @@ __schedule
 	负载均衡、RCU、空闲注入等特殊场景
 */
 
-// 6、是否发生调度事件，是则跳转到第7步，否则跳转到第4步
+// 6、是否发生调度事件，是则跳转到第7步进行任务调度，否则跳转到第4步继续运行当前任务
 /*
-在系统运行的各个时间点都可能设置了调度标志，但是某些时间点是进行调度无法保证内核数据的一致性，
+在系统运行的各个时间点都可能设置了调度标志，但是某些时间点进行调度无法保证内核数据的一致性，
 所以系统设置固定的安全调度点，在安全调度点判断是否设置调度标志，是则进行调度，否则继续执行原先的Task。
+内核中的安全调度点有：
 6.1、中断返回路径
     - 从内核态返回用户态 ：检查 TIF_NEED_RESCHED 并调用 schedule()
     - 从中断返回 ： preempt_schedule_irq() 处理中断返回时的调度
-6.2、统调用返回
+6.2、系统调用返回
     - 系统调用完成返回用户空间前检查调度标志
 6.3、主动调度点
     - schedule() 直接调用 ：任务主动让出CPU
@@ -185,9 +244,27 @@ __schedule
 
 
 
-在上述linux内核调度流程的整体代码调用链中，相关步骤的具体流程如下:
+# 4、Linux内核调度流程具体步骤分析
 
-### 2.1.1、调度初始化sched_init代码分析
+## 4.0、系统启动 ENTRY(stext)
+
+在ARM v7-a架构下，硬件上电运行bootloader初始化系统硬件环境，并加载内核镜像，之后跳转到内核设置的复位异常处理函数执行。
+
+```assembly
+// arch/arm/kernel/head.S
+ENTRY(stext)
+```
+
+
+
+## 4.1、调度初始化 sched_init
+
+### 4.1.1、sched_init函数代码分析
+
+在3.2小节中指出Linux内核调度初始化使用的是 sched_init 函数：
+
+* 设置CPU的运行时队列 struct rq
+* 设置rq的各个具体运行时队列 cfs_rq、rt_rq、dl_rq
 
 ```c
 // 1、调度初始化
@@ -236,7 +313,7 @@ void __init sched_init(void)
 
 
 
-#### 运行时队列struct rq的地址计算
+### 4.1.2、其中运行时队列struct rq的地址计算
 
 ​	其中Linux内核per-CPU变量系统的核心机制： 基准地址 + 偏移量 = 实际地址 ，然后通过临时指针变量进行结构化访问和初始化。
 
@@ -328,7 +405,9 @@ rq = cpu_rq(2) = &runqueues + __per_cpu_offset[2] -> runqueues_cpu2
 
 
 
-### 2.1.2、选择新任务pick_next_task代码分析
+## 4.2、选择权限最高的任务 pick_next_task
+
+### 4.2.1、pick_next_task 代码分析
 
 ```c
 // 2、选择权限最高的Task
@@ -356,7 +435,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 
 
-#### 调度类struct sched_class的初始化与使用
+### 4.2.2、其中调度类struct sched_class的初始化与使用
 
 ```c
 // 1、链接脚本层面的调度类布局定义
@@ -481,9 +560,9 @@ pick_next_task
 
 
 
-#### 调度类中class->pick_next_task的核心流程
+### 4.2.3、其中不同调度类class->pick_next_task的核心流程
 
-##### 1、stop 调度类的 pick_next_task
+1）stop 调度类的 pick_next_task
 
 ```c
 // stop 调度类的 pick_next_task
@@ -510,7 +589,7 @@ pick_next_task_stop
     	return rq->stop;
 ```
 
-##### 2、deadline调度类的 pick_next_task
+2）deadline调度类的 pick_next_task
 
 ```c
 // Deadline调度类实现
@@ -544,7 +623,7 @@ pick_next_task_dl
     return p;
 ```
 
-##### 3、rt 调度类的 pick_next_task
+3）rt 调度类的 pick_next_task
 
 ```c
 // rt 调度类实现
@@ -607,7 +686,7 @@ pick_next_task_rt
     return p; 
 ```
 
-##### 4、cfs 公平调度类的 pick_next_task
+4）cfs 公平调度类的 pick_next_task
 
 ```c
 // cfs 公平调度类的 pick_next_task
@@ -642,7 +721,7 @@ __pick_next_task_fair
 			return container_of(se, struct task_struct, se);
 ```
 
-##### 5、idle 空闲调度类的pick_next_task
+5）idle 空闲调度类的 pick_next_task
 
 ```c
 // idle 空闲调度类实现
@@ -668,28 +747,242 @@ pick_next_task_idle
 
 
 
-### 2.1.3、Task的状态转换图分析
+## 4.3、上下文切换 context_switch
 
-在linux内核中的task_struct结构体中，有一个state成员用来标志Task的状态：
+### 4.3.1、context_switch函数分析
 
 ```c
-struct task_struct {
+// kernel\sched\core.c
+static __always_inline struct rq *
+context_switch(struct rq *rq, struct task_struct *prev,
+	       struct task_struct *next, struct rq_flags *rf)
+{
 ...
-	// == -1  unrunnable	不运行状态
-	// == 0   runnable		运行状态
-	// >  0   stopped		停止状态
-	volatile long			state;
+    // Task地址空间的切换
+	switch_mm_irqs_off(prev->active_mm, next->mm, next);
 ...
+    // 切换寄存器和栈
+	switch_to(prev, next, prev);
+... 
 }
 ```
 
-转换关系图：系统使用任务调度将Task放在各个状态之间进行切换。
-
-<img src="./assets/image-20250730131014027-1753852215723-3.png" alt="image-20250730131014027" style="zoom: 67%;" />
 
 
+### 4.3.2、其中地址空间切换函数 switch_mm_irqs_off 
 
-### 2.1.4、调度标志 TIF_NEED_RESCHED
+```c
+// include\linux\mmu_context.h
+# define switch_mm_irqs_off switch_mm
+
+// arch\arm\include\asm\mmu_context.h
+static inline void
+switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *tsk)
+	check_and_switch_context(next, tsk);
+		cpu_switch_mm(mm->pgd, mm);
+		// cpu_switch_mm 具体就是 cpu_v7_switch_mm
+		// arch\arm\mm\proc-v7-2level.S
+		ENTRY(cpu_v7_switch_mm)
+            // 设置TTBR0寄存器，TTBR0指向当前进程的页表基址
+            mcr	p15, 0, r0, c2, c0, 0		@ set TTB 0
+```
+
+这是arm 64架构下的地址空间切换示意图，arm 32类似：
+
+![image-20250730210806978](./assets/image-20250730210806978-1753880888269-7-1753880900384-9.png)
+
+
+
+### 4.3.3、其中寄存器切换函数switch_to
+
+```c
+// arch\arm\include\asm\switch_to.h
+#define switch_to(prev,next,last)					\
+do {									\
+	__complete_pending_tlbi();					\
+	last = __switch_to(prev,task_thread_info(prev), task_thread_info(next));	\
+} while (0)
+
+// arch\arm\kernel\entry-armv.S
+ENTRY(__switch_to)
+...
+    // TI_CPU_SAVE ：thread_info结构体中用于保存CPU寄存器的偏移量
+    add	ip, r1, #TI_CPU_SAVE
+	// 保存的寄存器 ：r4-r10（sl=r10）、fp（r11）、sp（r13）、lr（r14）
+    ARM(	stmia	ip!, {r4 - sl, fp, sp, lr} )
+...
+   	// ldmia 指令同时恢复了栈指针（sp）和程序计数器（pc）
+	ARM(	ldmia	r4, {r4 - sl, fp, sp, pc}  )
+...
+ENDPROC(__switch_to)
+```
+
+这是arm 64架构下寄存器切换的示意图，arm32类似：
+
+![image-20250730210959986](./assets/image-20250730210959986-1753881001235-11.png)
+
+
+
+### 4.3.4、其中cpu_switch_mm到cpu_v7_switch_mm的转换过程
+
+1）函数调用链路
+
+```c
+cpu_switch_mm(mm->pgd, mm) 
+    ↓
+cpu_do_switch_mm (宏定义)
+    ↓  
+processor.switch_mm (函数指针)
+    ↓
+cpu_v7_switch_mm (ARMv7具体实现)
+```
+
+
+
+2）关键数据结构和映射机制
+
+2.1）`processor` 结构体定义
+
+在 arch\arm\mm\proc-macros.S 中，`define_processor_functions` 宏定义了 `processor` 结构体：
+
+```assembly
+// arch\arm\mm\proc-macros.S
+.macro define_processor_functions name:req, dabort:req, pabort:req, nommu=0, suspend=0, bugs=0
+    .type   \name\()_processor_functions, #object
+    .align 2
+ENTRY(\name\()_processor_functions)
+    .word   \dabort
+    .word   \pabort
+    .word   cpu_\name\()_proc_init
+    .word   \bugs
+    .word   cpu_\name\()_proc_fin
+    .word   cpu_\name\()_reset
+    .word   cpu_\name\()_do_idle
+    .word   cpu_\name\()_dcache_clean_area
+    .word   cpu_\name\()_switch_mm          @ 第9个字段：switch_mm函数指针
+    // ... existing code ...
+.endm
+```
+
+
+
+2.2）ARMv7 处理器函数表定义
+
+在 arch\arm\mm\proc-v7.S 中：
+
+```assembly
+// arch\arm\mm\proc-v7.S
+@ 定义ARMv7处理器函数表
+define_processor_functions v7, dabort=v7_early_abort, pabort=v7_pabort, suspend=1, bugs=cpu_v7_bugs_init
+```
+
+这会展开为：
+
+```assembly
+v7_processor_functions:
+    .word   v7_early_abort
+    .word   v7_pabort  
+    .word   cpu_v7_proc_init
+    .word   cpu_v7_bugs_init
+    .word   cpu_v7_proc_fin
+    .word   cpu_v7_reset
+    .word   cpu_v7_do_idle
+    .word   cpu_v7_dcache_clean_area
+    .word   cpu_v7_switch_mm        @ 关键：switch_mm函数指针
+    .word   cpu_v7_set_pte_ext
+    // ... existing code ...
+```
+
+
+
+2.3）处理器信息结构体 (`proc_info_list`)
+
+在同一文件中定义了各种ARMv7处理器的信息：
+
+```assembly
+// arch\arm\mm\proc-v7.S
+.macro __v7_proc name, initfunc, mm_mmuflags = 0, io_mmuflags = 0, hwcaps = 0, proc_fns = v7_processor_functions, cache_fns = v7_cache_fns
+    // ... existing code ...
+    .long   \proc_fns                @ 指向processor函数表
+    // ... existing code ...
+.endm
+
+@ 具体的ARMv7处理器定义
+__v7_proc_info:
+    .long   0x000f0000              @ CPU ID
+    .long   0x000f0000              @ CPU ID mask  
+    __v7_proc __v7_proc_info, __v7_setup
+```
+
+
+
+3）运行时映射过程
+
+3.1）系统启动时的处理器识别
+
+**CPU识别**：系统启动时，内核读取CP15协处理器的Main ID Register (MIDR)来识别CPU类型
+
+**匹配proc_info**：根据CPU ID在 `.proc.info.init` 段中查找匹配的 `proc_info_list` 结构体
+
+**设置函数指针**：将匹配的 `processor_functions` 结构体地址赋值给全局的 `processor` 变量
+
+
+
+3.2）函数指针的设置
+
+在 arch\arm\include\asm\proc-fns.h 中：
+
+```c
+// arch\arm\include\asm\proc-fns.h
+extern struct processor processor;
+#define cpu_do_switch_mm(pgd,mm) processor.switch_mm(pgd,mm)
+```
+
+
+
+4）最终的函数实现
+
+```assembly
+// arch\arm\mm\proc-v7-2level.S
+ENTRY(cpu_v7_switch_mm)
+#ifdef CONFIG_MMU
+    mmid    r1, r1                  @ 获取 mm->context.id
+    ALT_SMP(orr r0, r0, #TTB_FLAGS_SMP)
+    ALT_UP(orr  r0, r0, #TTB_FLAGS_UP)
+    mcr p15, 0, r1, c13, c0, 1      @ 设置context ID
+    isb
+    mcr p15, 0, r0, c2, c0, 0       @ 设置TTBR0 (页表基址)
+    isb
+#endif
+    bx  lr
+ENDPROC(cpu_v7_switch_mm)
+```
+
+
+
+5）总结
+
+整个映射过程的关键在于：
+
+1. **编译时**：通过宏定义建立处理器函数表，将 `cpu_v7_switch_mm` 的地址放入 `v7_processor_functions` 结构体的第9位
+
+2. **运行时**：系统启动时根据CPU ID找到对应的 `proc_info_list`，并将其中的 `processor_functions` 赋值给全局 `processor` 变量
+
+3. **调用时**：`cpu_do_switch_mm` 宏展开为 `processor.switch_mm`，实际调用的就是 `cpu_v7_switch_mm` 函数
+
+这种设计实现了ARM架构下不同处理器的统一接口，同时允许每个处理器有自己特定的优化实现。对于ARMv7处理器，最终会调用 `cpu_v7_switch_mm` 来完成页表切换和TTBR寄存器的更新。
+
+
+
+## 4.4、运行Task
+
+此时系统正常运行各个Task的代码。
+
+
+
+## 4.5、设置调度标志 TIF_NEED_RESCHED
+
+### 4.5.1、调度标志介绍
 
 linux内核中是否需要调度的标志设置在task_struct ==> thread_info ==> flags中：
 
@@ -742,15 +1035,15 @@ static inline int test_tsk_need_resched(struct task_struct *tsk)
 			return test_bit(flag, (unsigned long *)&ti->flags);
 ```
 
-​	**注意**：虽然 set_tsk_need_resched() 和 clear_tsk_need_resched() 是最常用的高级接口，但Linux内核中还存在其他直接操作 TIF_NEED_RESCHED 标志的函数，特别是在SMP环境下使用原子操作的函数。这些函数在不同的上下文中被调用，以确保调度器能够正确地处理任务重调度请求。
+**注意**：虽然 set_tsk_need_resched() 和 clear_tsk_need_resched() 是最常用的高级接口，但Linux内核中还存在其他直接操作 TIF_NEED_RESCHED 标志的函数，特别是在SMP环境下使用原子操作的函数。这些函数在不同的上下文中被调用，以确保调度器能够正确地处理任务重调度请求。
 
 
 
-### 2.1.5、调度标志的设置时机
+### 4.5.2、调度标志的设置时机
 
-以下列举几个linux内核中设置调度标志的时机：
+设置调度标志可能发生在系统运行过程中的各个时间点，以下列举几个Linux内核中设置调度标志的时机。
 
-#### 1、系统时钟中断时
+1）系统时钟中断时
 
 ```c
 /*
@@ -783,7 +1076,7 @@ scheduler_tick
 						set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);
 ```
 
-#### 2、唤醒Task时
+2）唤醒Task时
 
 ```c
 /*
@@ -808,7 +1101,7 @@ wake_up_process
                                 set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);
 ```
 
-#### 3、创建task时
+3）创建task时
 
 ```c
 /*
@@ -830,7 +1123,7 @@ kernel_clone(&args);
                         set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);
 ```
 
-#### 4、设置Task的nice时
+4）设置Task的nice值时
 
 ```c
 /*
@@ -861,7 +1154,7 @@ set_user_nice
                 set_tsk_thread_flag(tsk,TIF_NEED_RESCHED);		
 ```
 
-#### 5、做负载均衡时
+5）做负载均衡时
 
 ```c
 /*
@@ -895,35 +1188,41 @@ run_rebalance_domains
 
 
 
-### 2.1.6、执行调度的时机
+## 4.6、判断是否发生调度
 
-调度也就是抢占，主要有两种方式：
+### 4.6.1、调度时机
 
-* **用户态抢占**
-    * 定义：
-        * 是指当进程在用户空间执行时，内核可以中断该进程并切换到另一个进程。这是最常见和最容易实现的抢占方式。
-    * 触发时机：
-        * 系统调用返回时 ：从内核态返回用户态前检查调度标志
-        * 中断处理返回用户态时 ：中断处理完成后返回用户空间前
-        * 异常处理返回时 ：处理完页面错误等异常后
+系统在固定的安全调度点根据是否设置调度标志 TIF_NEED_RESCHED 来确定是否需要调度。
 
-* **内核态抢占**
-    * 定义：
-        * 内核态抢占是指当进程在内核空间执行时（如系统调用、中断处理），内核可以中断当前执行并切换到更高优先级的进程。这需要 CONFIG_PREEMPTION 配置选项支持。
-    * 触发时机：
-        * 中断处理程序返回内核态时 ：如果有更高优先级任务需要运行
-        * 自愿调度点 ：内核代码中的 cond_resched() 调用
-        * 锁释放时 ：释放自旋锁等同步原语时
-        * 系统调用过程中 ：长时间运行的系统调用中的抢占点
+安全调度点也就是执行调度的时机，可分为用户态抢占和内核态抢占。
+
+**用户态抢占**
+
+* 定义：是指当进程在用户空间执行时，内核可以中断该进程并切换到另一个进程。这是最常见和最容易实现的抢占方式。
+* 触发时机：
+  * 系统调用返回时 ：从内核态返回用户态前检查调度标志
+  * 中断处理返回用户态时 ：中断处理完成后返回用户空间前
+  * 异常处理返回时 ：处理完页面错误等异常后
+
+**内核态抢占**
+
+* 定义：内核态抢占是指当进程在内核空间执行时（如系统调用、中断处理），内核可以中断当前执行并切换到更高优先级的进程。这需要 CONFIG_PREEMPTION 配置选项支持。
+* 触发时机：
+  * 中断处理程序返回内核态时 ：如果有更高优先级任务需要运行
+  * 自愿调度点 ：内核代码中的 cond_resched() 调用
+  * 锁释放时 ：释放自旋锁等同步原语时
+  * 系统调用过程中 ：长时间运行的系统调用中的抢占点
 
 
 根据上述用户态抢占和内核态抢占的分析，提供七种抢占的函数调用路径分析：
 
-#### 1、用户态抢占路径（User Preemption）
+
+
+### 4.6.2、用户态抢占路径（User Preemption）
 
 用户态抢占发生在从内核态返回用户态时，通过检查调度标志来决定是否需要切换任务。
 
-##### 1.1、用户态中断返回路径
+1）用户态中断返回路径
 
 ```c
 硬件中断 → vector_irq
@@ -943,7 +1242,7 @@ do_work_pending (处理信号、调度等)
 schedule() [间接调用]
 ```
 
-##### 1.2、系统调用返回路径
+2）系统调用返回路径
 
 ```c
 svc #0 指令 → vector_swi (entry-common.S:232)
@@ -961,7 +1260,7 @@ slow_work_pending → do_work_pending
 schedule() [如果需要调度]
 ```
 
-##### 1.3、异常处理返回路径
+3）异常处理返回路径
 
 ```c
 数据访问异常/指令预取异常/未定义指令异常
@@ -977,7 +1276,7 @@ ret_to_user (entry-common.S:155)
 检查调度标志 → schedule() [可能调用]
 ```
 
-##### 1.4、进程创建返回路径
+4）进程创建返回路径
 
 ```c
 ret_from_fork (entry-common.S:185) [新进程首次调度]
@@ -993,11 +1292,13 @@ ret_slow_syscall
 schedule() [可能调用]
 ```
 
-#### 2、内核态抢占路径（Kernel Preemption）
+
+
+### 4.6.3、内核态抢占路径（Kernel Preemption）
 
 内核态抢占发生在内核执行过程中，需要 `CONFIG_PREEMPTION` 配置支持。
 
-##### 2.1、内核态中断抢占路径
+1）内核态中断抢占路径
 
 ```c
 硬件中断 → vector_irq (entry-armv.S:1075)
@@ -1015,7 +1316,7 @@ preempt_schedule_irq (core.c:5010) [关键函数]
 __schedule(true) [直接调用，true表示抢占调度]
 ```
 
-##### 2.2、定时器中断抢占路径
+2）定时器中断抢占路径
 
 ```c
 定时器中断 → vector_irq
@@ -1035,7 +1336,7 @@ resched_curr (如果需要设置调度标志)
 __schedule(true)
 ```
 
-##### 2.3、多核处理器间中断（IPI）抢占路径
+3）多核处理器间中断（IPI）抢占路径
 
 ```c
 IPI中断 → do_IPI (smp.c:630)
@@ -1053,7 +1354,11 @@ IPI_RESCHEDULE: scheduler_ipi (smp.c:650)
 __schedule(true)
 ```
 
-#### 3、关键区别总结
+
+
+### 4.6.4、用户/内核态抢占的区别总结
+
+总结表格：
 
 | 特性           | 用户态抢占 (路径1-4) | 内核态抢占 (路径5-7)  |
 | -------------- | -------------------- | --------------------- |
@@ -1065,14 +1370,12 @@ __schedule(true)
 | **安全性**     | 高（用户态无特权）   | 需要仔细控制          |
 | **实现复杂度** | 相对简单             | 较复杂                |
 
-#### 4、核心控制机制
-
 调度标志检查：
 
 - **用户态抢占**：检查 `TI_FLAGS` 中的调度相关标志
 - **内核态抢占**：检查 `_TIF_NEED_RESCHED` 标志和 `preempt_count`
 
-#### 5、关键汇编代码
+关键汇编代码：
 
 ```assembly
 // arch/arm/kernel/entry-armv.S
@@ -1089,7 +1392,7 @@ movs r1, r1, lsl #16
 bne slow_work_pending  // 处理待处理工作
 ```
 
-#### 6、抢占控制
+抢占控制：
 
 - `preempt_count > 0`：禁用内核态抢占
 - `preempt_count = 0`：允许内核态抢占
@@ -1099,313 +1402,31 @@ bne slow_work_pending  // 处理待处理工作
 
 
 
-### 2.1.7、具体调度schedule函数分析
+## 4.7、调度事件类型
 
-#### 1、schedule和__schedule函数
+1、Task主动放弃CPU
 
-```c
-// kernel\sched\core.c
-// 定义schedule函数：主动调度函数，用于用户态抢占场景
-// asmlinkage: 表示函数遵循汇编调用约定，参数通过栈传递
-// __visible: 确保函数在优化时不被内联或删除，保持可见性
-// __sched: 调度器相关函数标记，用于调试和性能分析
-asmlinkage __visible void __sched schedule(void)
-{
-	// 获取当前正在运行的任务结构体指针
-	struct task_struct *tsk = current;
+* 等待互斥锁
+* 等待信号量
+* 等待条件变量
+* 主动yield
 
-	// 提交当前任务的工作状态，处理可能的工作队列任务
-	// 确保在调度前完成当前任务的相关工作
-	sched_submit_work(tsk);
+等等情况，都会使得当前Task主动设置重新调度的标志，等到安全调度点进行任务调度。
 
-	// 开始调度循环，使用do-while确保至少执行一次调度
-	do {
-		// 禁用内核抢占，防止在调度过程中被其他任务抢占
-		// 这是关键的同步保护机制
-		preempt_disable();
 
-		// 调用核心调度函数，参数false表示这是主动调度（非抢占调度）
-		// __schedule是真正执行任务切换的核心函数
-		__schedule(false);
 
-		// 重新启用抢占，但不立即检查重新调度标志
-		// 这避免了在调度完成后立即再次调度的问题
-		sched_preempt_enable_no_resched();
+2、被动放弃CPU
 
-	// 检查是否需要重新调度，如果TIF_NEED_RESCHED标志被设置则继续循环
-	// 这处理了在调度过程中可能出现的新的调度请求
-	} while (need_resched());
+* 时间片耗尽
+* 高优先级Task抢占
 
-	// 更新任务的工作状态，完成调度后的清理工作
-	// 主要用于工作队列和延迟工作的状态同步
-	sched_update_worker(tsk);
-}
-```
+等等情况，都会使得系统设置当前Task的重新调度的标志，等到安全调度点进行任务调度。
 
-```c
-// kernel\sched\core.c
-static void __sched notrace __schedule(bool preempt)
-{
-...
-    // 获取所在cpu
-    cpu = smp_processor_id();
-	// 获取cpu对应运行时队列struct rq
-    rq = cpu_rq(cpu);
-...
-    // 更新运行时队列的时间
-    update_rq_clock(rq);
-...
-    // 选择new task
-    next = pick_next_task(rq, prev, &rf);
-    // 完成task的上下文切换主要有两方面：
-	// task的地址空间切换：struct mm_struct
-    // task的寄存器切换：r0、sp、fp等等
-    rq = context_switch(rq, prev, next, &rf);
-... 
-}
-```
 
-#### 2、pick_next_task函数
 
-选择new task的逻辑为：
+# 5、Linux内核的调度流程图
 
-* cfs_rq 队列上：红黑树是按照vruntime的大小排序的，选择最小的，即最左侧节点对应的task
-* rt_rq 队列上：使用优先级大小排序，选择优先级最高的队列，找到此优先级下最靠前的task
-* dl_rq 队列上：红黑树是按照task的deadline的大小排序，选择最小的，即最左侧节点对应的task
-
-```c
-// kernel\sched\core.c
-static inline struct task_struct *
-pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
-    // 1、如果所有任务否是cfs，那么直接使用cfs的函数pick_next_task_fair查找next task
-    if (likely(prev->sched_class <= &fair_sched_class && rq->nr_running == rq->cfs.h_nr_running)) {
-    	p = pick_next_task_fair(rq, prev, rf);
-        // 2、如果CFS调度类没有可运行的任务，选择idle任务作为下一个运行任务
-		if (!p) {
-			p = pick_next_task_idle(rq);
-        }
-	}
-	// 3、按照调度类的优先级顺序，依次从高到底在调度类中查找
-	// 下一个优先级最高的task，找到之后即可返回。
-	for_each_class(class) {
-		// 遍历所有调度类，按优先级从高到低的顺序
-		// 调度类优先级顺序通常为：stop > dl > rt > fair > idle
-		p = class->pick_next_task(rq); // 调用当前调度类的任务选择函数
-		if (p)
-			return p; // 如果找到可运行的任务，立即返回
-	}
-```
-
-
-
-#### 3、context_switch函数
-
-```c
-// kernel\sched\core.c
-static __always_inline struct rq *
-context_switch(struct rq *rq, struct task_struct *prev,
-	       struct task_struct *next, struct rq_flags *rf)
-{
-...
-    // Task地址空间的切换
-	switch_mm_irqs_off(prev->active_mm, next->mm, next);
-...
-    // 切换寄存器和栈
-	switch_to(prev, next, prev);
-... 
-}
-```
-
-##### 其中地址空间切换函数 switch_mm_irqs_off 
-
-```c
-// include\linux\mmu_context.h
-# define switch_mm_irqs_off switch_mm
-
-// arch\arm\include\asm\mmu_context.h
-static inline void
-switch_mm(struct mm_struct *prev, struct mm_struct *next, struct task_struct *tsk)
-	check_and_switch_context(next, tsk);
-		cpu_switch_mm(mm->pgd, mm);
-		// cpu_switch_mm 具体就是 cpu_v7_switch_mm
-		// arch\arm\mm\proc-v7-2level.S
-		ENTRY(cpu_v7_switch_mm)
-            // 设置TTBR0寄存器，TTBR0指向当前进程的页表基址
-            mcr	p15, 0, r0, c2, c0, 0		@ set TTB 0
-```
-
-这是arm 64架构下的地址空间切换示意图，arm 32类似：
-
-![image-20250730210806978](./assets/image-20250730210806978-1753880888269-7-1753880900384-9.png)
-
-
-
-##### 其中寄存器切换函数switch_to
-
-```c
-// arch\arm\include\asm\switch_to.h
-#define switch_to(prev,next,last)					\
-do {									\
-	__complete_pending_tlbi();					\
-	last = __switch_to(prev,task_thread_info(prev), task_thread_info(next));	\
-} while (0)
-
-// arch\arm\kernel\entry-armv.S
-ENTRY(__switch_to)
-...
-    // TI_CPU_SAVE ：thread_info结构体中用于保存CPU寄存器的偏移量
-    add	ip, r1, #TI_CPU_SAVE
-	// 保存的寄存器 ：r4-r10（sl=r10）、fp（r11）、sp（r13）、lr（r14）
-    ARM(	stmia	ip!, {r4 - sl, fp, sp, lr} )
-...
-   	// ldmia 指令同时恢复了栈指针（sp）和程序计数器（pc）
-	ARM(	ldmia	r4, {r4 - sl, fp, sp, pc}  )
-...
-ENDPROC(__switch_to)
-```
-
-这是arm 64架构下寄存器切换的示意图，arm32类似：
-
-![image-20250730210959986](./assets/image-20250730210959986-1753881001235-11.png)
-
-
-
-##### 其中`cpu_switch_mm`到`cpu_v7_switch_mm`的转换过程：
-
-##### 1. 函数调用链路
-
-```c
-cpu_switch_mm(mm->pgd, mm) 
-    ↓
-cpu_do_switch_mm (宏定义)
-    ↓  
-processor.switch_mm (函数指针)
-    ↓
-cpu_v7_switch_mm (ARMv7具体实现)
-```
-
-##### 2. 关键数据结构和映射机制
-
-###### 2.1 `processor` 结构体定义
-
-在 arch\arm\mm\proc-macros.S 中，`define_processor_functions` 宏定义了 `processor` 结构体：
-
-```assembly
-// arch\arm\mm\proc-macros.S
-.macro define_processor_functions name:req, dabort:req, pabort:req, nommu=0, suspend=0, bugs=0
-    .type   \name\()_processor_functions, #object
-    .align 2
-ENTRY(\name\()_processor_functions)
-    .word   \dabort
-    .word   \pabort
-    .word   cpu_\name\()_proc_init
-    .word   \bugs
-    .word   cpu_\name\()_proc_fin
-    .word   cpu_\name\()_reset
-    .word   cpu_\name\()_do_idle
-    .word   cpu_\name\()_dcache_clean_area
-    .word   cpu_\name\()_switch_mm          @ 第9个字段：switch_mm函数指针
-    // ... existing code ...
-.endm
-```
-
-###### 2.2 ARMv7 处理器函数表定义
-
-在 arch\arm\mm\proc-v7.S 中：
-
-```assembly
-// arch\arm\mm\proc-v7.S
-@ 定义ARMv7处理器函数表
-define_processor_functions v7, dabort=v7_early_abort, pabort=v7_pabort, suspend=1, bugs=cpu_v7_bugs_init
-```
-
-这会展开为：
-
-```assembly
-v7_processor_functions:
-    .word   v7_early_abort
-    .word   v7_pabort  
-    .word   cpu_v7_proc_init
-    .word   cpu_v7_bugs_init
-    .word   cpu_v7_proc_fin
-    .word   cpu_v7_reset
-    .word   cpu_v7_do_idle
-    .word   cpu_v7_dcache_clean_area
-    .word   cpu_v7_switch_mm        @ 关键：switch_mm函数指针
-    .word   cpu_v7_set_pte_ext
-    // ... existing code ...
-```
-
-###### 2.3 处理器信息结构体 (`proc_info_list`)
-
-在同一文件中定义了各种ARMv7处理器的信息：
-
-```assembly
-// arch\arm\mm\proc-v7.S
-.macro __v7_proc name, initfunc, mm_mmuflags = 0, io_mmuflags = 0, hwcaps = 0, proc_fns = v7_processor_functions, cache_fns = v7_cache_fns
-    // ... existing code ...
-    .long   \proc_fns                @ 指向processor函数表
-    // ... existing code ...
-.endm
-
-@ 具体的ARMv7处理器定义
-__v7_proc_info:
-    .long   0x000f0000              @ CPU ID
-    .long   0x000f0000              @ CPU ID mask  
-    __v7_proc __v7_proc_info, __v7_setup
-```
-
-##### 3. 运行时映射过程
-
-###### 3.1 系统启动时的处理器识别
-
-1. **CPU识别**：系统启动时，内核读取CP15协处理器的Main ID Register (MIDR)来识别CPU类型
-2. **匹配proc_info**：根据CPU ID在 `.proc.info.init` 段中查找匹配的 `proc_info_list` 结构体
-3. **设置函数指针**：将匹配的 `processor_functions` 结构体地址赋值给全局的 `processor` 变量
-
-###### 3.2 函数指针的设置
-
-在 arch\arm\include\asm\proc-fns.h 中：
-
-```c
-// arch\arm\include\asm\proc-fns.h
-extern struct processor processor;
-#define cpu_do_switch_mm(pgd,mm) processor.switch_mm(pgd,mm)
-```
-
-##### 4. 最终的函数实现
-
-```assembly
-// arch\arm\mm\proc-v7-2level.S
-ENTRY(cpu_v7_switch_mm)
-#ifdef CONFIG_MMU
-    mmid    r1, r1                  @ 获取 mm->context.id
-    ALT_SMP(orr r0, r0, #TTB_FLAGS_SMP)
-    ALT_UP(orr  r0, r0, #TTB_FLAGS_UP)
-    mcr p15, 0, r1, c13, c0, 1      @ 设置context ID
-    isb
-    mcr p15, 0, r0, c2, c0, 0       @ 设置TTBR0 (页表基址)
-    isb
-#endif
-    bx  lr
-ENDPROC(cpu_v7_switch_mm)
-```
-
-##### 5. 总结
-
-整个映射过程的关键在于：
-
-1. **编译时**：通过宏定义建立处理器函数表，将 `cpu_v7_switch_mm` 的地址放入 `v7_processor_functions` 结构体的第9位
-
-2. **运行时**：系统启动时根据CPU ID找到对应的 `proc_info_list`，并将其中的 `processor_functions` 赋值给全局 `processor` 变量
-
-3. **调用时**：`cpu_do_switch_mm` 宏展开为 `processor.switch_mm`，实际调用的就是 `cpu_v7_switch_mm` 函数
-
-这种设计实现了ARM架构下不同处理器的统一接口，同时允许每个处理器有自己特定的优化实现。对于ARMv7处理器，最终会调用 `cpu_v7_switch_mm` 来完成页表切换和TTBR寄存器的更新。
-
-
-
-## 2.2、linux内核的调度流程图
+通过上述分析，Linux整个运行时调度流程，如图所示：
 
 ```mermaid
 graph TB 
@@ -1472,123 +1493,18 @@ graph TB
      class P decision;
 ```
 
-```mermaid
-graph TB
-    %% ===== 任务创建阶段 =====
-    subgraph "任务创建阶段"
-        A[任务创建] --> B[fork/clone系统调用]
-        B --> C[task_fork_fair]
-        C --> D[初始化vruntime]
-        D --> E[place_entity设置初始vruntime]
-        E --> F[vruntime = curr->vruntime或min_vruntime]
-    end
-
-    %% ===== 任务状态转换 =====
-    subgraph "任务状态管理"
-        F --> G{任务状态}
-        G -->|TASK_RUNNING| H[可运行状态]
-        G -->|TASK_INTERRUPTIBLE| I[可中断睡眠]
-        G -->|TASK_UNINTERRUPTIBLE| J[不可中断睡眠]
-        G -->|TASK_STOPPED| K[停止状态]
-        G -->|TASK_ZOMBIE| L[僵尸状态]
-    end
-
-    %% ===== 入队流程 =====
-    subgraph "入队流程"
-        H --> M[enqueue_task_fair]
-        M --> N[enqueue_entity]
-        N --> O[更新vruntime归一化]
-        O --> P[place_entity调整vruntime]
-        P --> Q[__enqueue_entity]
-        Q --> R[按vruntime插入红黑树]
-        R --> S[更新min_vruntime]
-    end
-
-    %% ===== 调度选择 =====
-    subgraph "调度选择"
-        S --> T[pick_next_task_fair]
-        T --> U[pick_next_entity]
-        U --> V[__pick_first_entity]
-        V --> W[选择vruntime最小任务]
-        W --> X[set_next_entity]
-    end
-
-    %% ===== 任务运行 =====
-    subgraph "任务运行"
-        X --> Y[任务开始运行]
-        Y --> Z[update_curr更新vruntime]
-        Z --> AA[vruntime += calc_delta_fair]
-        AA --> BB{运行状态检查}
-        BB -->|时间片耗尽| CC[scheduler_tick]
-        BB -->|主动让出| DD[schedule]
-        BB -->|被抢占| EE[check_preempt_curr]
-        BB -->|阻塞等待| FF[状态变更]
-    end
-
-    %% ===== 出队流程 =====
-    subgraph "出队流程"
-        CC --> GG[entity_tick]
-        DD --> GG
-        EE --> GG
-        FF --> HH[dequeue_task_fair]
-        GG --> II[check_preempt_tick]
-        II -->|需要抢占| HH
-        HH --> JJ[dequeue_entity]
-        JJ --> KK[__dequeue_entity]
-        KK --> LL[从红黑树移除]
-        LL --> MM[更新min_vruntime]
-    end
-
-    %% ===== 状态转换触发 =====
-    subgraph "状态转换触发"
-        MM --> NN{转换原因}
-        NN -->|睡眠| OO[进入睡眠状态]
-        NN -->|抢占| PP[重新入队]
-        NN -->|退出| QQ[任务终止]
-        NN -->|继续运行| RR[保持运行]
-    end
-
-    %% ===== 唤醒流程 =====
-    subgraph "唤醒流程"
-        I --> SS[wake_up_process]
-        J --> SS
-        SS --> TT[try_to_wake_up]
-        TT --> UU[ttwu_queue]
-        UU --> VV[ttwu_do_activate]
-        VV --> WW[activate_task]
-        WW --> M
-    end
-
-    %% ===== 循环连接 =====
-    OO --> I
-    OO --> J
-    PP --> M
-    RR --> Y
-    QQ --> XX[任务结束]
-
-    %% ===== 样式定义 =====
-    classDef create fill:#E8F5E8,stroke:#4CAF50,stroke-width:2px,color:#000000;
-    classDef state fill:#E3F2FD,stroke:#2196F3,stroke-width:2px,color:#000000;
-    classDef enqueue fill:#FFF3E0,stroke:#FF9800,stroke-width:2px,color:#000000;
-    classDef schedule fill:#F3E5F5,stroke:#9C27B0,stroke-width:2px,color:#000000;
-    classDef running fill:#FFEBEE,stroke:#F44336,stroke-width:2px,color:#000000;
-    classDef dequeue fill:#E0F2F1,stroke:#009688,stroke-width:2px,color:#000000;
-    classDef transition fill:#FFF8E1,stroke:#FFC107,stroke-width:2px,color:#000000;
-    classDef wakeup fill:#FCE4EC,stroke:#E91E63,stroke-width:2px,color:#000000;
-    classDef decision fill:#FFDC00,stroke:#FFFFFF,stroke-width:3px,color:#000000;
-    classDef taskEnd fill:#EEEEEE,stroke:#757575,stroke-width:2px,color:#000000;
-
-    class A,B,C,D,E,F create;
-    class G,H,I,J,K,L state;
-    class M,N,O,P,Q,R,S enqueue;
-    class T,U,V,W,X schedule;
-    class Y,Z,AA,BB running;
-    class CC,DD,EE,FF,GG,HH,II,JJ,KK,LL,MM dequeue;
-    class NN,OO,PP,QQ,RR transition;
-    class SS,TT,UU,VV,WW wakeup;
-    class BB,NN decision;
-    class XX taskEnd;
-```
 
 
+# 6、对Linux调度机制的问题
+
+## 6.1、调度类为何使用灌段方式进行初始化？
+
+这种设计体现了内核开发中"性能优先、可靠性至上"的原则。通过牺牲一定的灵活性（不能动态添加调度类），换取了：
+
+1. 极致的性能 ：零初始化开销，最优的内存访问模式
+2. 绝对的可靠性 ：无初始化失败风险，确定的内存布局
+3. 更高的安全性 ：只读的函数指针，减少攻击面
+4. 简化的复杂性 ：编译时确定，运行时逻辑简单
+
+这正是为什么Linux内核能够在各种环境下都保持高性能和高可靠性的重要原因之一。这种"编译时优化，运行时简化"的设计思想在内核的很多关键路径中都有体现。
 

@@ -66,7 +66,7 @@
 | 用户态快速互斥锁 Futex | [用户态快速互斥锁Futex机制与Liteos_a内核Futex机制分析.md](docs/用户态快速互斥锁Futex机制与Liteos_a内核Futex机制分析.md) | [Linux内核Futex机制分析.md](docs/Linux内核Futex机制分析.md) |      |
 | 消息队列 Queue         | [消息队列Queue机制与Liteos_a内核消息队列机制分析.md](docs/消息队列Queue机制与Liteos_a内核消息队列机制分析.md) |                                                             |      |
 | 信号 Signal            | [信号Signal机制与Liteos_a内核信号机制分析.md](docs/信号Signal机制与Liteos_a内核信号机制分析.md) |                                                             |      |
-| 共享内存 ShareMemory   | [共享内核Shm机制与Liteos_a内核Shm机制分析.md](docs/共享内核Shm机制与Liteos_a内核Shm机制分析.md) |                                                             |      |
+| 共享内存 ShareMemory   | [共享内存Shm机制与Liteos_a内核Shm机制分析.md](docs/共享内存Shm机制与Liteos_a内核Shm机制分析.md) |                                                             |      |
 
 
 
@@ -78,6 +78,7 @@
 | 虚拟内存 Virtual Memory           | [虚拟内存与Liteos_a内核虚拟内存分析.md](docs/虚拟内存与Liteos_a内核虚拟内存分析.md) |           |      |
 | 虚拟内存区域的红黑树RBTree管理    | [红黑树RBTree分析.zxm](docs/红黑树RBTree分析.zxm)            |           |      |
 | 使用虚拟内存的堆内存管理算法TLSF  | [堆内存与Liteos_a内核堆内存TLSF机制分析.md](docs/堆内存与Liteos_a内核堆内存TLSF机制分析.md) |           |      |
+| 虚拟内存管理算法SLAB              |                                                              |           |      |
 | 虚实映射 Virtual-Physical Mapping | [虚实映射机制与MMU分析.md](docs/虚实映射机制与MMU分析.md)    |           |      |
 
 

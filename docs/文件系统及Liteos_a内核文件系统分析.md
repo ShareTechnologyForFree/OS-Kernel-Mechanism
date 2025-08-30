@@ -1954,6 +1954,412 @@ int fatfs_umount(struct Mount *mnt, struct Vnode **blkdriver)
 
 
 
+## 4.7、（新增）根文件系统初始化
+
+### 4.7.1、挂载根文件系统 OsMountRootfs 函数
+
+参考系统启动过程中 用户态根进行 Init的启动流程，其中使用 SystemInit 函数：
+
+```c
+// device_soc_hisilicon\hi3516dv300\sdk_liteos\mpp\module_init\src\system_init.c
+void SystemInit(void) {
+...
+    // 根文件系统挂载
+    SystemInit_MountRootfs();
+}
+
+void SystemInit_MountRootfs(void)
+{
+#ifdef LOSCFG_PLATFORM_ROOTFS
+    LOS_Msleep(450);                    // 等待450ms，确保硬件准备就绪
+    dprintf("OsMountRootfs start ...\n");
+    
+    if (LOS_GetCmdLine()) {             // 获取命令行参数
+        PRINT_ERR("get cmdline error!\n");
+    }
+    
+    if (LOS_ParseBootargs()) {          // 解析启动参数
+        PRINT_ERR("parse bootargs error!\n");
+    }
+    
+    if (OsMountRootfs()) {              // 执行实际的根文件系统挂载
+        PRINT_ERR("mount rootfs error!\n");
+    }
+    
+    dprintf("OsMountRootfs end ...\n");
+#endif
+}
+
+INT32 OsMountRootfs()
+{
+    INT32 ret;
+    CHAR *dev = NULL;
+    CHAR *fstype = NULL;
+    UINT64 rootAddr, rootSize;
+    UINT64 userAddr, userSize;
+    UINT32 mountFlags;
+
+    // 1. 解析根分区参数
+    ret = ParseRootArgs(&dev, &fstype, &rootAddr, &rootSize, &mountFlags);
+    if (ret != LOS_OK) return ret;
+
+    // 2. 解析用户分区参数
+    ret = ParseUserArgs(rootAddr, rootSize, &userAddr, &userSize);
+    if (ret != LOS_OK) return ret;
+
+    // 3. 验证分区参数的有效性
+    ret = CheckValidation(rootAddr, rootSize, userAddr, userSize);
+    if (ret != LOS_OK) return ret;
+
+    // 4. 添加分区到系统
+    ret = AddPartitions(dev, rootAddr, rootSize, userAddr, userSize);
+    if (ret != LOS_OK) return ret;
+
+    // 5. 挂载分区
+    ret = MountPartitions(fstype, mountFlags);
+    if (ret != LOS_OK) return ret;
+
+    return LOS_OK;
+}
+```
+
+
+
+### 4.7.2、添加分区 AddPartitions 函数
+
+```c
+/*
+为什么要添加分区？
+	添加分区的主要目的是 逻辑分割存储空间 ，而不是物理分割。具体原因包括：
+存储管理需求:
+    - 功能隔离 ：将不同用途的数据分开存储（如系统文件、用户数据、应用数据）
+    - 安全性 ：防止不同类型的数据相互干扰，避免用户数据损坏系统文件
+    - 管理便利 ：便于系统对不同类型数据进行独立管理和维护
+添加分区实际做的是：
+    1. 创建分区元数据 ：记录分区的起始地址、大小、类型等信息
+    2. 注册设备节点 ：在 /dev 目录下创建设备文件（如 /dev/mtdblock0 、 /dev/mmcblk0p1 ）
+    3. 建立映射关系 ：将逻辑分区号映射到物理存储区域
+    4. 添加到分区表 ：将分区信息加入系统分区管理链表
+文件系统的格式化和初始化发生在 挂载阶段
+*/
+STATIC INT32 AddPartitions(CHAR *dev, UINT64 rootAddr, UINT64 rootSize, UINT64 userAddr, UINT64 userSize)
+{
+#if defined(LOSCFG_STORAGE_SPINOR) || defined(LOSCFG_STORAGE_SPINAND)
+    INT32 ret;
+    INT32 blk0 = 0;
+    INT32 blk2 = 2;
+    if (strcmp(dev, "flash") == 0 || strcmp(dev, FLASH_TYPE) == 0) {
+        // 添加根分区（MTD分区0）
+        ret = add_mtd_partition(FLASH_TYPE, rootAddr, rootSize, blk0);
+        if (ret != LOS_OK) {
+            PRINT_ERR("Failed to add mtd root partition!\n");
+            return LOS_NOK;
+        }
+        // 添加用户存储分区（MTD分区2）
+        ret = add_mtd_partition(FLASH_TYPE, userAddr, userSize, blk2);
+        if (ret != LOS_OK) {
+            PRINT_ERR("Failed to add mtd storage partition!\n");
+            return LOS_NOK;
+        }
+
+        return LOS_OK;
+    }
+#endif
+
+#ifdef LOSCFG_STORAGE_EMMC
+    if (strcmp(dev, "emmc") == 0) {
+        // 处理 eMMC 分区
+        return AddEmmcParts(rootAddr, rootSize, userAddr, userSize);
+    }
+#endif
+
+    PRINT_ERR("Unsupport dev type: %s\n", dev);
+    return LOS_NOK;
+}
+```
+
+其中 add_mtd_partition 函数：
+
+```c
+/*
+ * Attention: both startAddr and length should be aligned with block size.
+ * If not, the actual start address and length won't be what you expected.
+ */
+/*
+这个函数的主要功能是 在MTD（Memory Technology Device）设备上创建一个新的分区 ，具体包括：
+核心功能 ：
+    1. 分区创建 ：在指定的Flash存储设备上创建逻辑分区
+    2. 设备节点注册 ：为分区创建对应的设备文件（块设备和字符设备）
+    3. 分区管理 ：将新分区加入系统分区管理链表
+*/
+INT32 add_mtd_partition(const CHAR *type, UINT32 startAddr,
+                        UINT32 length, UINT32 partitionNum)
+{
+    INT32 ret;
+    mtd_partition *newNode = NULL;
+    partition_param *param = NULL;
+
+    // 1. 参数有效性检查：验证分区号和设备类型
+    if ((partitionNum >= CONFIG_MTD_PATTITION_NUM) || (type == NULL)) {
+        return -EINVAL;
+    }
+
+    // 2. 获取互斥锁，保证分区操作的原子性
+    ret = pthread_mutex_lock(&g_mtdPartitionLock);
+    if (ret != ENOERR) {
+        PRINT_ERR("%s %d, mutex lock failed, error:%d\n", __FUNCTION__, __LINE__, ret);
+    }
+
+    // 3. 初始化MTD设备参数，获取Flash设备信息
+    ret = MtdInitFsparParam(type, &param);
+    if (ret != ENOERR) {
+        goto ERROR_OUT;
+    }
+
+    // 4. 检查分区参数合法性（地址范围、重叠检查等）
+    ret = AddParamCheck(startAddr, param, partitionNum, length);
+    if (ret != ENOERR) {
+        goto ERROR_OUT;
+    }
+
+    // 5. 分配新的分区节点内存
+    newNode = (mtd_partition *)zalloc(sizeof(mtd_partition));
+    if (newNode == NULL) {
+        (VOID)pthread_mutex_unlock(&g_mtdPartitionLock);
+        return -ENOMEM;
+    }
+
+    // 6. 设置分区节点的基本属性（地址、大小、分区号等）
+    PAR_ASSIGNMENT(newNode, length, startAddr, partitionNum, param->flash_mtd, param->block_size);
+
+    // 7. 注册块设备驱动，创建 /dev/mtdblockX 设备节点
+    ret = BlockDriverRegisterOperate(newNode, param, partitionNum);
+    if (ret) {
+        goto ERROR_OUT1;
+    }
+
+    // 8. 注册字符设备驱动，创建 /dev/mtdX 设备节点
+    ret = CharDriverRegisterOperate(newNode, param, partitionNum);
+    if (ret) {
+        goto ERROR_OUT2;
+    }
+
+    // 9. 将新分区节点添加到分区链表尾部
+    LOS_ListTailInsert(&param->partition_head->node_info, &newNode->node_info);
+    
+    // 10. 初始化分区节点的互斥锁
+    (VOID)LOS_MuxInit(&newNode->lock, NULL);
+
+    // 11. 释放全局互斥锁
+    ret = pthread_mutex_unlock(&g_mtdPartitionLock);
+    if (ret != ENOERR) {
+        PRINT_ERR("%s %d, mutex unlock failed, error:%d\n", __FUNCTION__, __LINE__, ret);
+    }
+
+    return ENOERR;
+    
+// 错误处理流程
+ERROR_OUT2:
+    // 12. 注册字符设备失败时，注销已注册的块设备
+    (VOID)BlockDriverUnregister(newNode);
+ERROR_OUT1:
+    // 13. 释放已分配的分区节点内存
+    free(newNode);
+ERROR_OUT:
+    // 14. 释放互斥锁并返回错误码
+    (VOID)pthread_mutex_unlock(&g_mtdPartitionLock);
+    return ret;
+}
+```
+
+其中 AddEmmcParts 函数：
+
+```c
+/*
+该函数的主要功能包括：
+    1.磁盘管理 ：获取 eMMC 磁盘对象，进行反初始化和重新初始化
+    2.分区创建 ：创建多个逻辑分区（根分区、补丁分区、存储分区、用户数据分区）
+    3.地址转换 ：将字节地址转换为扇区地址（除以 EMMC_SEC_SIZE ）
+    4.空间分配 ：合理分配 eMMC 存储空间，用户数据分区使用剩余的所有空间
+    5.条件编译 ：根据 LOSCFG_PLATFORM_PATCHFS 配置决定是否创建补丁分区
+    6.错误处理 ：每个关键步骤都有错误检查和处理机制
+这个函数是 eMMC 存储设备分区管理的核心实现，为系统提供了完整的存储分区布局
+*/
+STATIC INT32 AddEmmcParts(INT32 rootAddr, INT32 rootSize, INT32 userAddr, INT32 userSize)
+{
+    // 1. 获取 eMMC 磁盘对象
+    los_disk *emmcDisk = los_get_mmcdisk_bytype(EMMC);
+    
+    // 2. 获取设备节点名称
+    void *block = ((struct drv_data *)emmcDisk->dev->data)->priv;
+    const char *node_name = StorageBlockGetEmmcNodeName(block);
+    
+    // 3. 反初始化磁盘
+    if (los_disk_deinit(emmcDisk->disk_id) != ENOERR) {
+        return LOS_NOK;
+    }
+
+    // 4. 获取 eMMC 分区信息结构
+    struct disk_divide_info *emmc = StorageBlockGetEmmc();
+    
+    // 5. 添加根分区
+    ret = add_mmc_partition(emmc, rootAddr / EMMC_SEC_SIZE, rootSize / EMMC_SEC_SIZE);
+    
+    // 6. 添加补丁分区（如果启用）
+#ifdef LOSCFG_PLATFORM_PATCHFS
+    UINT64 patchStartCnt = userAddr / EMMC_SEC_SIZE;
+    UINT64 patchSizeCnt = PATCH_SIZE / EMMC_SEC_SIZE;
+    ret = add_mmc_partition(emmc, patchStartCnt, patchSizeCnt);
+    userAddr += PATCH_SIZE;  // 调整用户分区起始地址
+#endif
+
+    // 7. 添加存储分区
+    UINT64 storageStartCnt = userAddr / EMMC_SEC_SIZE;
+    UINT64 storageSizeCnt = userSize / EMMC_SEC_SIZE;
+    ret = add_mmc_partition(emmc, storageStartCnt, storageSizeCnt);
+    
+    // 8. 添加用户数据分区（使用剩余空间）
+    UINT64 userdataStartCnt = storageStartCnt + storageSizeCnt;
+    UINT64 userdataSizeCnt = emmcDisk->sector_count - userdataStartCnt;
+    ret = add_mmc_partition(emmc, userdataStartCnt, userdataSizeCnt);
+    
+    // 9. 等待设备识别
+    LOS_Msleep(10);
+    
+    // 10. 重新初始化磁盘
+    INT32 diskId = los_alloc_diskid_byname(node_name);
+    if (los_disk_init(node_name, StorageBlockGetMmcOps(), block, diskId, emmc) != ENOERR) {
+        return LOS_NOK;
+    }
+    
+    return LOS_OK;
+}
+```
+
+
+
+### 4.7.3、挂载分区 MountPartitions 函数
+
+使用mount函数进行具体文件系统的挂载操作：
+
+* 在VFS层简历虚拟节点Vnode
+* 使用具体的文件系统mount函数进行格式化，构造具体文件系统自己的管理数据结构、文件、目录等等信息
+
+```c
+/*
+该函数的主要功能包括：
+    1.根文件系统挂载 ：首先挂载根文件系统，这是系统启动的基础
+    2.条件编译支持 ：根据 LOSCFG_STORAGE_EMMC 和 LOSCFG_PLATFORM_PATCHFS 
+    			   配置决定挂载哪些分区
+    3.目录创建 ：为每个分区创建对应的挂载点目录
+    4.智能挂载策略 ：
+       - 首先尝试直接挂载
+       - 如果挂载失败且错误为 ENOTSUP （不支持），则自动格式化为 FAT32 文件系统
+       - 格式化后重新尝试挂载
+    5.分区类型 ：
+       - 根分区 ：系统根文件系统
+       - 补丁分区 ：用于系统补丁和更新（仅在 eMMC + PatchFS 配置下）
+       - 存储分区 ：用户存储空间
+       - 用户数据分区 ：用户数据存储（仅在 eMMC 配置下）
+    6.错误处理 ：每个步骤都有完善的错误检查和错误信息输出
+这个函数是文件系统初始化的关键步骤，确保系统启动后所有必要的分区都能正确挂载并可用。
+*/
+STATIC INT32 MountPartitions(CHAR *fsType, UINT32 mountFlags)
+{
+    INT32 ret;
+    INT32 err;
+
+    // 1. 挂载根文件系统
+    ret = mount(ROOT_DEV_NAME, ROOT_DIR_NAME, fsType, mountFlags, NULL);
+    if (ret != LOS_OK) {
+        err = get_errno();
+        PRINT_ERR("Failed to mount %s, rootDev %s, errno %d: %s\n", ROOT_DIR_NAME, ROOT_DEV_NAME, err, strerror(err));
+        return ret;
+    }
+
+#ifdef LOSCFG_STORAGE_EMMC
+#ifdef LOSCFG_PLATFORM_PATCHFS
+    // 2. 如果启用了 eMMC 存储和补丁文件系统，创建补丁目录
+    ret = mkdir(PATCH_DIR_NAME, DEFAULT_MOUNT_DIR_MODE);
+    if ((ret != LOS_OK) && ((err = get_errno()) != EEXIST)) {
+        PRINT_ERR("Failed to mkdir %s, errno %d: %s\n", PATCH_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+
+    // 3. 尝试挂载补丁分区
+    ret = mount(PATCH_DEV_NAME, PATCH_DIR_NAME, fsType, 0, DEFAULT_MOUNT_DATA);
+    if ((ret != LOS_OK) && ((err = get_errno()) == ENOTSUP)) {
+        // 4. 如果挂载失败且错误为不支持，则格式化补丁分区为 FAT32
+        ret = format(PATCH_DEV_NAME, 0, FM_FAT32);
+        if (ret != LOS_OK) {
+            PRINT_ERR("Failed to format %s\n", PATCH_DEV_NAME);
+            return ret;
+        }
+
+        // 5. 格式化后重新尝试挂载补丁分区
+        ret = mount(PATCH_DEV_NAME, PATCH_DIR_NAME, fsType, 0, DEFAULT_MOUNT_DATA);
+        if (ret != LOS_OK) {
+            err = get_errno();
+        }
+    }
+    if (ret != LOS_OK) {
+        PRINT_ERR("Failed to mount %s, errno %d: %s\n", PATCH_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+#endif
+#endif
+
+    // 6. 创建用户存储目录
+    ret = mkdir(STORAGE_DIR_NAME, DEFAULT_MOUNT_DIR_MODE);
+    if ((ret != LOS_OK) && ((err = get_errno()) != EEXIST)) {
+        PRINT_ERR("Failed to mkdir %s, errno %d: %s\n", STORAGE_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+
+    // 7. 挂载用户存储分区
+    ret = mount(USER_DEV_NAME, STORAGE_DIR_NAME, fsType, 0, DEFAULT_MOUNT_DATA);
+    if (ret != LOS_OK) {
+        err = get_errno();
+        PRINT_ERR("Failed to mount %s, errno %d: %s\n", STORAGE_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+
+#ifdef LOSCFG_STORAGE_EMMC
+    // 8. 如果启用了 eMMC 存储，创建用户数据目录
+    ret = mkdir(USERDATA_DIR_NAME, DEFAULT_MOUNT_DIR_MODE);
+    if ((ret != LOS_OK) && ((err = get_errno()) != EEXIST)) {
+        PRINT_ERR("Failed to mkdir %s, errno %d: %s\n", USERDATA_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+
+    // 9. 尝试挂载用户数据分区
+    ret = mount(USERDATA_DEV_NAME, USERDATA_DIR_NAME, fsType, 0, DEFAULT_MOUNT_DATA);
+    if ((ret != LOS_OK) && ((err = get_errno()) == ENOTSUP)) {
+        // 10. 如果挂载失败且错误为不支持，则格式化用户数据分区为 FAT32
+        ret = format(USERDATA_DEV_NAME, 0, FM_FAT32);
+        if (ret != LOS_OK) {
+            PRINT_ERR("Failed to format %s\n", USERDATA_DEV_NAME);
+            return ret;
+        }
+
+        // 11. 格式化后重新尝试挂载用户数据分区
+        ret = mount(USERDATA_DEV_NAME, USERDATA_DIR_NAME, fsType, 0, DEFAULT_MOUNT_DATA);
+        if (ret != LOS_OK) {
+            err = get_errno();
+        }
+    }
+    if (ret != LOS_OK) {
+        PRINT_ERR("Failed to mount %s, errno %d: %s\n", USERDATA_DIR_NAME, err, strerror(err));
+        return ret;
+    }
+#endif
+    // 12. 所有分区挂载成功
+    return LOS_OK;
+}
+```
+
+
+
 # 5、对文件系统机制的思考
 
 ## 5.1、为什么会有不同类型的文件系统

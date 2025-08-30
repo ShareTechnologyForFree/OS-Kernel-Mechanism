@@ -163,6 +163,10 @@ typedef struct {
     * --> SchedEDF edf; 
     * --> UINT64 finishTime; // startTime + deadline排序
 
+在Liteos_a内核当中，将调度实体和运行实体复用的方式，体现出设计的简洁性和运行时的高效性。
+
+在Linux内核当中，是将调度实体se和运行实体struct_task分离，体现出设计的灵活性和运行时的可扩展性。
+
 
 
 ## 3.3、Liteos_a内核调度的具体流程分析
@@ -211,7 +215,7 @@ reset_vector                                      | LOS_Schedule
 // 在系统启动阶，前面的mmu初始化中已经设置了ttbr并启用mmu，
 // 此时已经运行在某个地址空间当中，
 // 而且首次任务调度，没有之前的任务,即不需要地址空间的切换
-// 也不需要在两个任务之间调度，只需要选择一个任务并恢复其寄存器即可，
+// 也不需要在两个任务之间调度，只需要选择一个任务并恢复其寄存器即可。
 												  |				SchedTaskSwitch(rq, runTask, newTask);
 												  |					OsTaskSchedule
 				OsTaskContextLoad
@@ -219,7 +223,7 @@ reset_vector                                      | LOS_Schedule
 					// 恢复新任务的寄存器并跳转执行
 					LDMFD   SP!, {R0-R3, R12, LR}
 					RFEIA   SP!
-					/*
+/* 
 	在Task运行过程中，会发生各种各样的情况，其中能够影响调度的有如下因素
     4.1、时间因素
         - 时间片耗尽 ：通过 OsTickHandler 定期检查当前任务是否用完时间片
@@ -481,8 +485,10 @@ OsTaskSchedule:
     /* 1. 保存当前任务的上下文 */
     MRS      R2, CPSR                /* 1.1 获取当前程序状态寄存器(CPSR)值到R2 */
     STMFD    SP!, {R2}               /* 1.2 将CPSR压入栈 */
-    STMFD    SP!, {LR}               /* 1.3 将链接寄存器LR(返回地址)压入栈 */
-    STMFD    SP!, {LR}               /* 1.4 再次保存LR(可能是为了对齐或双重保护) */
+    STMFD    SP!, {LR}				 /* 1.3 将LR压入旧线程的PC中，新线程运行结束之后，再次返回旧线程
+                        			  * 旧线程从当前指令的下一条指令继续执行，即旧线程的 返回地址LR
+                        			  */
+    STMFD    SP!, {LR}               /* 1.4 将LR压入旧线程的LR中 */
     STMFD    SP!, {R12}              /* 1.5 保存R12寄存器 */
 
     /* 2. 为用户模式寄存器预留空间 */
@@ -512,7 +518,7 @@ OsTaskContextLoad:
     LDR     R3, [SP, #(11 * 4)]      /* 9.2 加载保存的CPSR值到R3(栈上偏移11*4的位置) */
     AND     R0, R3, #CPSR_MASK_MODE  /* 9.3 提取CPSR中的模式位 */
     CMP     R0, #CPSR_USER_MODE      /* 9.4 比较是否为用户模式 */
-    BNE     OsKernelTaskLoad          /* 9.5 如果不是用户模式，跳转到内核任务加载 */
+    BNE     OsKernelTaskLoad         /* 9.5 如果不是用户模式，跳转到内核任务加载 */
 
     /* 10. 用户模式任务处理 */
     MVN     R2, #CPSR_INT_DISABLE     /* 10.1 R2 = ~CPSR_INT_DISABLE (取反，准备启用中断) */
