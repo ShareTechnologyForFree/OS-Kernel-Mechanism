@@ -99,7 +99,12 @@
 | 文件系统 File System | [文件系统及Liteos_a内核文件系统分析.md](docs/文件系统及Liteos_a内核文件系统分析.md) |           |      |
 | FATFS 分析           | [FAT文件系统分析.md](other/FAT文件系统分析.md)               |           |      |
 
+## 2.7、其他
 
+| 机制       | Linux内核                                                    |
+| :--------- | ------------------------------------------------------------ |
+| cgroup机制 | [Linux内核cgroup-v2机制分析.md](docs/Linux内核cgroup-v2机制分析.md) |
+|            |                                                              |
 
 # 3、面试高频考点映射
 
