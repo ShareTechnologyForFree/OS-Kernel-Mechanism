@@ -9,8 +9,6 @@
 - 源码级分析+工程化思考（含设计权衡与场景取舍）
 - 配套面试考点映射与实践验证案例
 
-
-
 # 1、仓库介绍
 
 本仓库主要分享操作系统相关的技术文章，目标是对技术的核心原理进行剖析。
@@ -32,8 +30,6 @@
 * markdown工具：[typora](https://typora.io/)
 * 思维导图工具：[知犀](https://www.zhixi.com/)（这个能在里面插入代码块）
 
-
-
 # 2、机制分析
 
 ## 2.1、进程、线程/任务、调度
@@ -45,15 +41,11 @@
 | 调度 | [调度及Liteos_a内核调度分析.md](docs/调度及Liteos_a内核调度分析.md) | 1、[Linux内核调度模型初始化和运行流程分析.md](docs/Linux内核调度模型初始化和运行流程分析.md) <br />2、[Linux内核CFS调度算法原理与源码分析.md](docs/Linux内核CFS调度算法原理与源码分析.md) |                                                              |
 | 协程 |                                                              |                                                              | [协程Coroutine和C语言协程库libaco分析.md](other/协程Coroutine和C语言协程库libaco分析.md) |
 
-
-
 ## 2.2、ELF 可执行文件
 
 | 机制    | Liteos_a内核                                                 | Linux内核 | 其他 |
 | ------- | ------------------------------------------------------------ | --------- | ---- |
 | ELF文件 | [ELF可执行文件及Liteos_a内核加载ELF文件分析.md](docs/ELF可执行文件及Liteos_a内核加载ELF文件分析.md) |           |      |
-
-
 
 ## 2.3、IPC 进程间通信机制
 
@@ -68,8 +60,6 @@
 | 信号 Signal            | [信号Signal机制与Liteos_a内核信号机制分析.md](docs/信号Signal机制与Liteos_a内核信号机制分析.md) |                                                             |      |
 | 共享内存 ShareMemory   | [共享内存Shm机制与Liteos_a内核Shm机制分析.md](docs/共享内存Shm机制与Liteos_a内核Shm机制分析.md) |                                                             |      |
 
-
-
 ## 2.4、物理内存、虚拟内存、虚实映射
 
 | 机制                              | Liteos_a内核                                                 | Linux内核 | 其他 |
@@ -81,16 +71,12 @@
 | 虚拟内存管理算法SLAB              |                                                              |           |      |
 | 虚实映射 Virtual-Physical Mapping | [虚实映射机制与MMU分析.md](docs/虚实映射机制与MMU分析.md)    |           |      |
 
-
-
 ## 2.5、中断与异常
 
 | 机制                               | Liteos_a内核                                                 | Linux内核 | 其他 |
 | ---------------------------------- | ------------------------------------------------------------ | --------- | ---- |
 | 中断与异常 Interrupt and Exception | [中断异常机制与Liteos_a内核中断异常机制分析.md](docs/中断异常机制与Liteos_a内核中断异常机制分析.md) |           |      |
 | 中断控制器 GIC                     | [中断控制器GICv2以及Liteos_a内核使用流程分析.md](docs/中断控制器GICv2以及Liteos_a内核使用流程分析.md) |           |      |
-
-
 
 ## 2.6、文件系统
 
@@ -103,8 +89,8 @@
 
 | 机制       | Linux内核                                                    |
 | :--------- | ------------------------------------------------------------ |
+| cgroup机制 | [Linux内核cgroup-v1机制分析.md](docs/Linux内核cgroup-v1机制分析.md) |
 | cgroup机制 | [Linux内核cgroup-v2机制分析.md](docs/Linux内核cgroup-v2机制分析.md) |
-|            |                                                              |
 
 # 3、面试高频考点映射
 
@@ -118,8 +104,6 @@
 
 > 持续更新中，欢迎提出高频问题补充
 
-
-
 # 4、反馈与协作
 
 发现错误？提交[Issue](https://github.com/ShareTechnologyForFree/OS-Kernel-Mechanism/issues)（附内核版本+代码行号）。
@@ -127,4 +111,3 @@
 希望补充内容？在[讨论区](https://github.com/ShareTechnologyForFree/OS-Kernel-Mechanism/discussions)提出需求。
 
 贡献代码？Fork仓库后提交PR（需遵循[贡献规范](CONTRIBUTING.md)）。
-
