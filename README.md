@@ -87,15 +87,15 @@
 
 ## 2.7、其他
 
-| 机制          | Linux内核                                                    |
-| :------------ | ------------------------------------------------------------ |
-| cgroup机制    | [Linux内核cgroup-v1机制分析.md](docs/Linux内核cgroup-v1机制分析.md) |
-| cgroup机制    | [Linux内核cgroup-v2机制分析.md](docs/Linux内核cgroup-v2机制分析.md) |
-| workqueue机制 | [Linux内核workqueue机制分析.md](docs/Linux内核workqueue机制分析.md) |
-| kprobe机制    | [Linux内核kprobe机制分析.md](docs/Linux内核kprobe机制分析.md) |
-|               |                                                              |
-|               |                                                              |
-|               |                                                              |
+| 机制            | Linux内核                                                    |
+| :-------------- | ------------------------------------------------------------ |
+| cgroup机制      | [Linux内核cgroup-v1机制分析.md](docs/Linux内核cgroup-v1机制分析.md) |
+| cgroup机制      | [Linux内核cgroup-v2机制分析.md](docs/Linux内核cgroup-v2机制分析.md) |
+| workqueue机制   | [Linux内核workqueue机制分析.md](docs/Linux内核workqueue机制分析.md) |
+| kprobe机制      | [Linux内核kprobe机制分析.md](docs/Linux内核kprobe机制分析.md) |
+| page与folio结构 | [Linux内核page与folio结构分析.md](docs/Linux内核page与folio结构分析.md) |
+|                 |                                                              |
+|                 |                                                              |
 
 # 3、面试高频考点映射
 
